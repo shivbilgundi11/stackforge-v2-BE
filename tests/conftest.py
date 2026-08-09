@@ -66,6 +66,27 @@ async def engine() -> AsyncIterator[object]:
     await test_engine.dispose()
 
 
+@pytest_asyncio.fixture(scope="session", loop_scope="session")
+async def seeded_catalog(engine: object) -> None:
+    """The real catalog seed, committed once for the whole session.
+
+    Committed outside the per-test transaction on purpose: catalog data is
+    reference data, every test reads the same rows, and re-seeding 2,200 rows
+    per test would dominate the suite's runtime. Tests that mutate catalog rows
+    do so inside their own transaction and are rolled back as usual.
+
+    Tests assert against *real seeded values* — `gpt-4o-mini` really is
+    $0.00015 per 1k input — because a test that only checks a status code
+    passes just as happily when the seed loads nothing.
+    """
+    from app.services.seed_service import seed_all
+
+    maker = async_sessionmaker(bind=engine, expire_on_commit=False)  # type: ignore[arg-type]
+    async with maker() as session:
+        await seed_all(session)
+        await session.commit()
+
+
 @pytest_asyncio.fixture(loop_scope="session")
 async def db(engine: object) -> AsyncIterator[AsyncSession]:
     """One transaction per test, rolled back at the end.

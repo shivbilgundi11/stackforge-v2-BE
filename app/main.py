@@ -12,6 +12,7 @@ from sqlalchemy.exc import IntegrityError
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from app.api.v1 import auth as auth_router
+from app.api.v1 import catalog as catalog_router
 from app.api.v1 import health as health_router
 from app.core.config import settings
 from app.core.database import dispose_engine
@@ -153,6 +154,7 @@ async def handle_unexpected(_request: Request, exc: Exception) -> JSONResponse:
 
 app.include_router(health_router.router)
 app.include_router(auth_router.router, prefix="/api/v1/auth")
+app.include_router(catalog_router.router, prefix="/api/v1/catalog")
 
 
 @app.get("/", include_in_schema=False)

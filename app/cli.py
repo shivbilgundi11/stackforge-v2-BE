@@ -30,7 +30,41 @@ def _openapi() -> None:
     print(json.dumps(app.openapi(), indent=2))
 
 
-COMMANDS = {"generate-keypair": _generate_keypair, "openapi": _openapi}
+def _seed() -> None:
+    """Load the catalog seed.
+
+    Non-destructive: existing rows are left alone so an editorial correction
+    survives the next deploy. `--refresh` overwrites from the seed files, for
+    when the seed file *is* the correction.
+    """
+    import asyncio
+
+    refresh = "--refresh" in sys.argv
+
+    async def run() -> None:
+        from app.core.database import SessionLocal
+        from app.services.seed_service import seed_all
+
+        async with SessionLocal() as session:
+            report = await seed_all(session, refresh=refresh)
+            await session.commit()
+
+        for table in sorted(set(report.inserted) | set(report.updated)):
+            print(
+                f"{table:24} +{report.inserted.get(table, 0):<6} "
+                f"~{report.updated.get(table, 0):<6} "
+                f"={report.skipped.get(table, 0)}"
+            )
+        print(f"\ninserted {report.total_inserted}, updated {report.total_updated}")
+
+    asyncio.run(run())
+
+
+COMMANDS = {
+    "generate-keypair": _generate_keypair,
+    "openapi": _openapi,
+    "seed": _seed,
+}
 
 
 def main() -> int:
