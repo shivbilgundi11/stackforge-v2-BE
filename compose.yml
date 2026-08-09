@@ -1,0 +1,51 @@
+# Local dependencies only. The API and worker run on the host under `uv run`,
+# so a code change does not need a rebuild.
+#
+#   docker compose up -d
+#
+# Nothing here requires a third-party account. That property is deliberate:
+# onboarding a second developer should be one hour, not one day.
+
+name: stackforge
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: stackforge
+      POSTGRES_PASSWORD: stackforge
+      POSTGRES_DB: stackforge
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U stackforge -d stackforge"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    command: redis-server --save "" --appendonly no
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  # Catches every outbound email. Web UI on http://localhost:8025 — this is
+  # where verification and reset links land during development.
+  mailpit:
+    image: axllent/mailpit:latest
+    ports:
+      - "1025:1025"
+      - "8025:8025"
+    environment:
+      MP_SMTP_AUTH_ACCEPT_ANY: 1
+      MP_SMTP_AUTH_ALLOW_INSECURE: 1
+
+volumes:
+  pgdata:

@@ -1,0 +1,125 @@
+[project]
+name = "stackforge-api"
+version = "0.1.0"
+description = "StackForge API — AI engineering workbench"
+requires-python = ">=3.13,<3.14"
+dependencies = [
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.34",
+    "pydantic>=2.9",
+    "pydantic-settings>=2.6",
+    "email-validator>=2.2",
+    # persistence
+    "sqlalchemy[asyncio]>=2.0.36",
+    "asyncpg>=0.30",
+    "alembic>=1.14",
+    "greenlet>=3.1",
+    # cache / queue
+    "redis>=5.2",
+    # auth
+    "argon2-cffi>=23.1",
+    "pyjwt[crypto]>=2.10",
+    "uuid7>=0.1",
+    # observability
+    "structlog>=24.4",
+    # outbound
+    "httpx>=0.28",
+    # Windows has no system tz database; zoneinfo (and Alembic's timestamped
+    # revision files) need this.
+    "tzdata>=2024.2",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.3",
+    "pytest-asyncio>=0.24",
+    "pytest-cov>=6.0",
+    "fakeredis>=2.26",
+    "time-machine>=2.16",
+    "ruff>=0.8",
+    "mypy>=1.13",
+    "asgi-lifespan>=2.1",
+]
+
+[tool.uv]
+package = false
+
+# ---------------------------------------------------------------------------
+
+[tool.ruff]
+line-length = 100
+target-version = "py313"
+extend-exclude = ["alembic/versions"]
+
+[tool.ruff.lint]
+select = [
+    "E", "W",    # pycodestyle
+    "F",         # pyflakes
+    "I",         # isort
+    "N",         # pep8-naming
+    "UP",        # pyupgrade
+    "B",         # bugbear
+    "C4",        # comprehensions
+    "SIM",       # simplify
+    "RUF",       # ruff-specific
+    "ASYNC",     # async correctness
+    "S",         # bandit — this is an auth service
+]
+ignore = [
+    "S101",   # assert — used throughout the test suite
+    "B008",   # function call in default arg — this is how FastAPI Depends works
+    # The error classes are a taxonomy read at call sites (`raise NotFound()`,
+    # `raise Conflict()`). An "Error" suffix on all sixteen adds noise, not
+    # information.
+    "N818",
+    # `class X(str, Enum)` is what SQLAlchemy's Enum(values_callable=...) and
+    # Pydantic are wired against here. StrEnum is the modern idiom but the
+    # swap is churn with a serialization risk and no benefit.
+    "UP042",
+    # PEP 695 generics on a Pydantic BaseModel still have rough edges.
+    "UP046",
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["S105", "S106"]  # hardcoded test credentials are the point
+# S105 flags enum *members* named PASSWORD_RESET as hardcoded passwords.
+"app/models/auth.py" = ["S105"]
+
+# Raw string SQL is a lint failure, not a code-review catch. SQLAlchemy binds
+# parameters; a formatted string does not.
+[tool.ruff.lint.flake8-bandit]
+check-typed-exception = true
+
+# ---------------------------------------------------------------------------
+
+[tool.mypy]
+python_version = "3.13"
+strict = true
+warn_unreachable = true
+plugins = ["pydantic.mypy"]
+exclude = ["alembic/versions/"]
+
+[[tool.mypy.overrides]]
+module = ["fakeredis.*", "uuid_extensions.*", "asgi_lifespan.*"]
+ignore_missing_imports = true
+
+# ---------------------------------------------------------------------------
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "session"
+asyncio_default_test_loop_scope = "session"
+testpaths = ["tests"]
+addopts = "-q --strict-markers"
+filterwarnings = ["error::DeprecationWarning:app.*"]
+
+[tool.coverage.run]
+source = ["app"]
+# SQLAlchemy's async layer runs handler code inside greenlets. Without this,
+# coverage silently reports well-tested service functions as unexecuted, which
+# makes the whole number untrustworthy.
+concurrency = ["greenlet", "thread"]
+omit = ["app/main.py", "*/__init__.py"]
+
+[tool.coverage.report]
+exclude_lines = ["pragma: no cover", "if TYPE_CHECKING:", "raise NotImplementedError"]
