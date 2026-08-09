@@ -4,6 +4,7 @@ from typing import Any
 
 from fastapi import APIRouter, Request, Response, status
 
+from app.api import deps
 from app.api.deps import (
     CallerIdentity,
     CurrentUser,
@@ -78,17 +79,8 @@ def _clear_refresh_cookie(response: Response) -> None:
     )
 
 
-def _set_anon_cookie(response: Response, anon_id: str) -> None:
-    response.set_cookie(
-        settings.anon_cookie_name,
-        anon_id,
-        max_age=30 * 86_400,
-        httponly=True,
-        secure=settings.cookie_secure,
-        samesite="lax",
-        path="/",
-        domain=settings.cookie_domain,
-    )
+# Shared with the tool engine, which mints anonymous sessions of its own.
+_set_anon_cookie = deps.set_anon_cookie
 
 
 def _tokens_for(user: Any, session_id: str) -> SessionTokens:

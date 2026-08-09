@@ -32,6 +32,7 @@ from app.models.catalog import (
     ToolCategory,
     ToolStatus,
 )
+from app.models.tool_run import RunSource, ToolRun
 from app.models.user import Plan, PlanSource, User, UserRole
 
 __all__ = [
@@ -54,11 +55,13 @@ __all__ = [
     "PlanSource",
     "PricedEntity",
     "PricingHistory",
+    "RunSource",
     "Session",
     "SourceKind",
     "TokenPurpose",
     "Tool",
     "ToolCategory",
+    "ToolRun",
     "ToolStatus",
     "User",
     "UserRole",

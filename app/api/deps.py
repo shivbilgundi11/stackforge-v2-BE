@@ -10,7 +10,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Annotated
 
-from fastapi import Depends, Request
+from fastapi import Depends, Request, Response
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
@@ -116,6 +116,61 @@ async def get_identity(request: Request, db: Db) -> Identity:
     if anon_id:
         bind(anonymous_id=anon_id)
     return Identity(user=None, anonymous_id=anon_id, session_id=None)
+
+
+def set_anon_cookie(response: Response, anon_id: str) -> None:
+    """Path `/`, so every tool endpoint sees it — unlike the refresh cookie,
+    which is deliberately scoped to `/api/v1/auth`."""
+    response.set_cookie(
+        settings.anon_cookie_name,
+        anon_id,
+        max_age=30 * 86_400,
+        httponly=True,
+        secure=settings.cookie_secure,
+        samesite="lax",
+        path="/",
+        domain=settings.cookie_domain,
+    )
+
+
+async def get_run_identity(
+    request: Request, response: Response, db: Db, meta: RequestMeta
+) -> Identity:
+    """Like `get_identity`, but guarantees an owner.
+
+    Every `tool_runs` row must belong to exactly one user or anonymous session
+    — a check constraint enforces it, because orphan rows vanish from
+    per-user queries while still inflating the totals. A caller arriving with
+    no cookie at all is normal (a shared link, a cold first request, a curl),
+    so rather than reject them this mints an anonymous session and sets the
+    cookie, and the work becomes claimable if they sign up later.
+
+    Also revalidates the cookie against the database: a stale `anon_` id from
+    a purged session would otherwise fail the foreign key at insert time,
+    turning a routine request into a 409.
+    """
+    user = await get_current_user_optional(request, db)
+    if user is not None:
+        return Identity(
+            user=user,
+            anonymous_id=None,
+            session_id=getattr(request.state, "session_id", None),
+        )
+
+    anon_id = request.cookies.get(settings.anon_cookie_name)
+    if anon_id:
+        existing = await auth_service.get_anonymous_session(db, anon_id)
+        if existing is not None:
+            bind(anonymous_id=existing.id)
+            return Identity(user=None, anonymous_id=existing.id, session_id=None)
+
+    record = await auth_service.create_anonymous_session(db, meta=meta)
+    set_anon_cookie(response, record.id)
+    bind(anonymous_id=record.id)
+    return Identity(user=None, anonymous_id=record.id, session_id=None)
+
+
+RunIdentity = Annotated[Identity, Depends(get_run_identity)]
 
 
 async def get_current_user(request: Request, db: Db) -> User:
