@@ -121,13 +121,13 @@ async def test_architectures_are_listed_without_a_provenance_chip(client: AsyncC
 
 
 async def test_gpu_cost_returns_a_break_even_volume(client: AsyncClient) -> None:
-    gpus = (await client.get("/api/v1/catalog/gpus", params={"provider": "lambda"})).json()["data"]
-    gpu_id = next(row["id"] for row in gpus if row["instance_name"] == "gpu_1x_h100_pcie")
-
     response = await client.post(
         GPU_COST,
         json={
-            "gpu_id": gpu_id,
+            # A stable slug, not the generated row id. The id changes on every
+            # reseed, so a shared URL or a reopened run carrying one points at
+            # nothing.
+            "gpu": "lambda-gpu-1x-h100-pcie",
             "hours_per_day": "24",
             "days_per_month": 30,
             "utilisation_pct": "100",
@@ -145,8 +145,22 @@ async def test_gpu_cost_returns_a_break_even_volume(client: AsyncClient) -> None
 
 
 async def test_an_unknown_gpu_is_404(client: AsyncClient) -> None:
-    response = await client.post(GPU_COST, json={"gpu_id": "gpu_nope"})
+    response = await client.post(GPU_COST, json={"gpu": "not-a-gpu"})
     assert response.status_code == 404
+
+
+async def test_gpu_slugs_are_stable_and_readable(client: AsyncClient) -> None:
+    """What a URL carries. `gpu_06a784...` is regenerated on every reseed."""
+    gpus = (await client.get("/api/v1/catalog/gpus", params={"provider": "lambda"})).json()["data"]
+    slugs = {row["slug"] for row in gpus}
+
+    assert "lambda-gpu-1x-h100-pcie" in slugs
+    assert all(not slug.startswith("gpu_") for slug in slugs)
+
+    # Spot and on-demand rows of the same instance stay distinct.
+    aws = (await client.get("/api/v1/catalog/gpus", params={"provider": "aws"})).json()["data"]
+    p5 = {row["slug"] for row in aws if "p5-48xlarge" in row["slug"]}
+    assert p5 == {"aws-p5-48xlarge", "aws-p5-48xlarge-spot"}
 
 
 # ── cloud-cost ───────────────────────────────────────────────────────────────

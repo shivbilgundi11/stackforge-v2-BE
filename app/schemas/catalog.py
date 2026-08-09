@@ -68,6 +68,9 @@ class GpuOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     id: str
+    # Stable across re-seeds, unlike `id`. What a URL or a saved run should
+    # carry.
+    slug: str
     provider: str
     instance_name: str
     gpu_model: str

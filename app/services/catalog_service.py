@@ -145,6 +145,7 @@ def _model_out(row: ModelPricing, source: DataSource, now: datetime) -> ModelOut
 def _gpu_out(row: GpuPricing, source: DataSource, now: datetime) -> GpuOut:
     return GpuOut(
         id=row.id,
+        slug=row.slug,
         provider=row.provider,
         instance_name=row.instance_name,
         gpu_model=row.gpu_model,

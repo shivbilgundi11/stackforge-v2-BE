@@ -37,7 +37,9 @@ class VramEstimateIn(BaseModel):
 
 
 class GpuCostIn(BaseModel):
-    gpu_id: str
+    gpu: str = Field(
+        description="Stable GPU slug from /catalog/gpus, e.g. lambda-gpu-1x-h100-pcie."
+    )
     hours_per_day: Decimal = Field(default=Decimal(24), gt=0, le=24)
     days_per_month: int = Field(default=30, ge=1, le=31)
     utilisation_pct: Decimal = Field(default=Decimal(60), ge=1, le=100)

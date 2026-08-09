@@ -51,6 +51,7 @@ def gpu(
 ) -> GpuOut:
     return GpuOut(
         id=f"gpu_{instance}",
+        slug=instance.lower(),
         provider="test",
         instance_name=instance,
         gpu_model="H100",

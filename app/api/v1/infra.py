@@ -61,9 +61,9 @@ async def run_vram_estimate(
 @router.post("/gpu-cost", response_model=Envelope[ToolRunOut], name="run_gpu_cost")
 async def run_gpu_cost(db: Db, identity: RunIdentity, payload: GpuCostIn) -> dict[str, Any]:
     gpus = await catalog_service.list_gpus(db)
-    gpu = next((row for row in gpus if row.id == payload.gpu_id), None)
+    gpu = next((row for row in gpus if row.slug == payload.gpu), None)
     if gpu is None:
-        raise NotFound(f"No GPU instance with id {payload.gpu_id!r}.")
+        raise NotFound(f"No GPU instance with slug {payload.gpu!r}.")
 
     api_model = (
         await catalog_service.get_model(db, payload.api_model_id) if payload.api_model_id else None

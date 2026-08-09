@@ -247,6 +247,22 @@ class GpuPricing(Base, TimestampMixin):
     def vram_total_gb(self) -> int:
         return self.vram_gb * self.gpu_count
 
+    @property
+    def slug(self) -> str:
+        """A stable, shareable identifier.
+
+        `id` is a generated `gpu_06a7...` that changes whenever the catalog is
+        re-seeded, so a URL carrying one breaks silently and a bookmark from
+        last week points at nothing. This is derived from the same natural key
+        the seeder uses - provider, instance, and the spot flag - so it
+        survives a reseed the way `model_id` does.
+        """
+        base = f"{self.provider}-{self.instance_name}".lower()
+        cleaned = "".join(char if char.isalnum() else "-" for char in base)
+        while "--" in cleaned:
+            cleaned = cleaned.replace("--", "-")
+        return f"{cleaned.strip('-')}-spot" if self.spot else cleaned.strip("-")
+
 
 class Tool(Base, TimestampMixin):
     """A catalog entry.
