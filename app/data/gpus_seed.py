@@ -3,10 +3,23 @@
 Hourly on-demand USD unless `spot` is set. Hyperscaler rates are `us-east-1`
 and its equivalents; neocloud rates are the published single-region price.
 
-`vram_gb` is **per GPU**, not per instance — an 8xH100 node stores `80`, not
+`vram_gb` is **per GPU**, not per instance - an 8xH100 node stores `80`, not
 `640`. The instance total is `vram_gb * gpu_count`, computed where it is
 needed, because per-GPU VRAM is what determines whether a model fits after
 sharding and the total is what determines whether it fits at all.
+
+Two verification dates, and the split is deliberate (D-16).
+
+`VERIFIED_LIVE` rows were read from a price the vendor *publishes as a list
+price* and can be checked again the same way: the AWS and Azure pricing APIs,
+and the GCP, Lambda, and RunPod rate cards.
+
+`VERIFIED_CARRIED` rows are auction-cleared - EC2 spot and the Vast.ai
+marketplace - and clear on supply and demand, minute to minute. A hand-checked
+snapshot of one of those is not a list price that has gone slightly stale; it
+is a different kind of number, and refreshing its date would claim a currency
+it cannot have. They keep their original date on purpose, so the freshness chip
+renders them stale, because they are.
 """
 
 from __future__ import annotations
@@ -14,7 +27,8 @@ from __future__ import annotations
 from datetime import date
 from typing import NamedTuple
 
-VERIFIED = date(2026, 6, 29)
+VERIFIED_LIVE = date(2026, 8, 9)
+VERIFIED_CARRIED = date(2026, 6, 29)
 
 
 class GpuSeed(NamedTuple):
@@ -29,10 +43,15 @@ class GpuSeed(NamedTuple):
     region: str
     spot: bool
     source: str
+    verified: date = VERIFIED_LIVE
 
 
 GPUS: tuple[GpuSeed, ...] = (
-    # ---- AWS ------------------------------------------------------------
+    # ---- AWS --------------------------------------------------------------
+    # On-demand read from the pricing feed the EC2 pricing page itself calls,
+    # us-east-1/Linux. The P-family carried pre-price-cut rates: p5 was listed
+    # at 98.32 against an actual 55.04, which made every self-host-vs-API
+    # break-even in the infra planner wrong by nearly a factor of two.
     GpuSeed(
         "aws",
         "p5.48xlarge",
@@ -41,7 +60,7 @@ GPUS: tuple[GpuSeed, ...] = (
         80,
         192,
         2048,
-        "98.320000",
+        "55.040000",
         "us-east-1",
         False,
         "aws-ec2-pricing",
@@ -54,10 +73,15 @@ GPUS: tuple[GpuSeed, ...] = (
         80,
         192,
         2048,
+        # Auction-cleared, and left at its original date. The public spot feed
+        # still quotes 57.76 here, which is above the corrected on-demand rate
+        # and therefore impossible - AWS caps spot at on-demand - so the feed
+        # is stale against the price cut and is not a source worth copying.
         "29.496000",
         "us-east-1",
         True,
         "aws-ec2-pricing",
+        VERIFIED_CARRIED,
     ),
     GpuSeed(
         "aws",
@@ -67,7 +91,7 @@ GPUS: tuple[GpuSeed, ...] = (
         40,
         96,
         1152,
-        "32.772600",
+        "21.957642",
         "us-east-1",
         False,
         "aws-ec2-pricing",
@@ -80,7 +104,7 @@ GPUS: tuple[GpuSeed, ...] = (
         80,
         96,
         1152,
-        "40.965700",
+        "27.447050",
         "us-east-1",
         False,
         "aws-ec2-pricing",
@@ -96,13 +120,13 @@ GPUS: tuple[GpuSeed, ...] = (
         48,
         48,
         384,
-        "10.492400",
+        "10.492640",
         "us-east-1",
         False,
         "aws-ec2-pricing",
     ),
     GpuSeed(
-        "aws", "g6.xlarge", "L4", 1, 24, 4, 16, "0.804500", "us-east-1", False, "aws-ec2-pricing"
+        "aws", "g6.xlarge", "L4", 1, 24, 4, 16, "0.804800", "us-east-1", False, "aws-ec2-pricing"
     ),
     GpuSeed(
         "aws", "g5.xlarge", "A10G", 1, 24, 4, 16, "1.006000", "us-east-1", False, "aws-ec2-pricing"
@@ -123,7 +147,7 @@ GPUS: tuple[GpuSeed, ...] = (
     GpuSeed(
         "aws", "g4dn.xlarge", "T4", 1, 16, 4, 16, "0.526000", "us-east-1", False, "aws-ec2-pricing"
     ),
-    # ---- Google Cloud ---------------------------------------------------
+    # ---- Google Cloud -----------------------------------------------------
     GpuSeed(
         "gcp",
         "a3-highgpu-8g",
@@ -132,7 +156,7 @@ GPUS: tuple[GpuSeed, ...] = (
         80,
         208,
         1872,
-        "88.246000",
+        "88.490000",
         "us-central1",
         False,
         "gcp-compute-pricing",
@@ -145,7 +169,7 @@ GPUS: tuple[GpuSeed, ...] = (
         80,
         208,
         1872,
-        "94.480000",
+        "93.400713",
         "us-central1",
         False,
         "gcp-compute-pricing",
@@ -158,7 +182,7 @@ GPUS: tuple[GpuSeed, ...] = (
         40,
         12,
         85,
-        "3.673900",
+        "3.673385",
         "us-central1",
         False,
         "gcp-compute-pricing",
@@ -171,7 +195,7 @@ GPUS: tuple[GpuSeed, ...] = (
         80,
         12,
         170,
-        "5.068700",
+        "5.068798",
         "us-central1",
         False,
         "gcp-compute-pricing",
@@ -184,7 +208,7 @@ GPUS: tuple[GpuSeed, ...] = (
         24,
         4,
         16,
-        "0.855000",
+        "0.706832",
         "us-central1",
         False,
         "gcp-compute-pricing",
@@ -197,12 +221,14 @@ GPUS: tuple[GpuSeed, ...] = (
         24,
         48,
         192,
-        "4.964000",
+        "4.001665",
         "us-central1",
         False,
         "gcp-compute-pricing",
     ),
-    # ---- Azure ----------------------------------------------------------
+    # ---- Azure ------------------------------------------------------------
+    # Read from the public retail-prices API, eastus/Linux/Consumption. All
+    # four were already correct.
     GpuSeed(
         "azure",
         "ND96isr_H100_v5",
@@ -245,7 +271,9 @@ GPUS: tuple[GpuSeed, ...] = (
     GpuSeed(
         "azure", "NC4as_T4_v3", "T4", 1, 16, 4, 28, "0.526000", "eastus", False, "azure-vm-pricing"
     ),
-    # ---- Lambda Labs ----------------------------------------------------
+    # ---- Lambda Labs ------------------------------------------------------
+    # The rate card quotes per-GPU-hour; multi-GPU rows below are the node
+    # total. Every Lambda row had drifted low, the 8xH100 node by a third.
     GpuSeed(
         "lambda",
         "gpu_8x_h100_sxm5",
@@ -254,7 +282,8 @@ GPUS: tuple[GpuSeed, ...] = (
         80,
         208,
         1800,
-        "23.920000",
+        # 8 x $3.99/GPU/hr.
+        "31.920000",
         "us-west-1",
         False,
         "lambda-labs-pricing",
@@ -267,7 +296,7 @@ GPUS: tuple[GpuSeed, ...] = (
         80,
         26,
         200,
-        "2.490000",
+        "3.290000",
         "us-west-1",
         False,
         "lambda-labs-pricing",
@@ -277,10 +306,13 @@ GPUS: tuple[GpuSeed, ...] = (
         "gpu_1x_a100_sxm4",
         "A100",
         1,
-        80,
+        # 40, not 80: Lambda offers no single-GPU 80GB A100. The 80GB part is
+        # sold only as the 8x node, and claiming 80GB here would have let the
+        # VRAM estimator fit a model onto an instance nobody can rent.
+        40,
         30,
         220,
-        "1.790000",
+        "1.990000",
         "us-west-1",
         False,
         "lambda-labs-pricing",
@@ -293,23 +325,27 @@ GPUS: tuple[GpuSeed, ...] = (
         24,
         30,
         200,
-        "0.750000",
+        "1.290000",
         "us-west-1",
         False,
         "lambda-labs-pricing",
     ),
-    # ---- RunPod ---------------------------------------------------------
+    # ---- RunPod -----------------------------------------------------------
+    # RunPod publishes two tiers, and the seed previously mixed them: some
+    # rows were Community, some Secure, with nothing recording which. Mapped
+    # deliberately now - Secure Cloud is the dedicated tier and reads as
+    # on-demand, Community is the cheap interruptible one and reads as spot.
     GpuSeed(
-        "runpod", "H200 SXM", "H200", 1, 141, 24, 251, "3.590000", "global", False, "runpod-pricing"
+        "runpod", "H200 SXM", "H200", 1, 141, 24, 251, "4.390000", "global", False, "runpod-pricing"
     ),
     GpuSeed(
-        "runpod", "H100 SXM", "H100", 1, 80, 20, 251, "2.690000", "global", False, "runpod-pricing"
+        "runpod", "H100 SXM", "H100", 1, 80, 20, 251, "2.990000", "global", False, "runpod-pricing"
     ),
     GpuSeed(
-        "runpod", "H100 SXM", "H100", 1, 80, 20, 251, "1.650000", "global", True, "runpod-pricing"
+        "runpod", "H100 SXM", "H100", 1, 80, 20, 251, "2.690000", "global", True, "runpod-pricing"
     ),
     GpuSeed(
-        "runpod", "A100 SXM", "A100", 1, 80, 16, 125, "1.890000", "global", False, "runpod-pricing"
+        "runpod", "A100 SXM", "A100", 1, 80, 16, 125, "1.490000", "global", False, "runpod-pricing"
     ),
     GpuSeed(
         "runpod",
@@ -332,13 +368,17 @@ GPUS: tuple[GpuSeed, ...] = (
         48,
         8,
         50,
-        "0.760000",
+        "0.490000",
         "global",
         False,
         "runpod-pricing",
     ),
-    GpuSeed("runpod", "L40S", "L40S", 1, 48, 16, 62, "0.860000", "global", False, "runpod-pricing"),
-    # ---- Vast.ai (marketplace medians) ----------------------------------
+    GpuSeed("runpod", "L40S", "L40S", 1, 48, 16, 62, "0.990000", "global", False, "runpod-pricing"),
+    # ---- Vast.ai (marketplace medians) ------------------------------------
+    # Left at their original date, deliberately. Vast is an auction across
+    # 40+ datacentres with no published rate card, so there is nothing to
+    # verify against - only a live figure that is different by the time it is
+    # read. Dating these to today would dress a guess as a check.
     GpuSeed(
         "vast",
         "H100 SXM (median)",
@@ -351,6 +391,7 @@ GPUS: tuple[GpuSeed, ...] = (
         "global",
         False,
         "vast-ai-pricing",
+        VERIFIED_CARRIED,
     ),
     GpuSeed(
         "vast",
@@ -364,6 +405,7 @@ GPUS: tuple[GpuSeed, ...] = (
         "global",
         False,
         "vast-ai-pricing",
+        VERIFIED_CARRIED,
     ),
     GpuSeed(
         "vast",
@@ -377,6 +419,7 @@ GPUS: tuple[GpuSeed, ...] = (
         "global",
         False,
         "vast-ai-pricing",
+        VERIFIED_CARRIED,
     ),
     GpuSeed(
         "vast",
@@ -390,5 +433,6 @@ GPUS: tuple[GpuSeed, ...] = (
         "global",
         False,
         "vast-ai-pricing",
+        VERIFIED_CARRIED,
     ),
 )

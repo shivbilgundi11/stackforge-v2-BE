@@ -10,22 +10,27 @@ decorative — a row nobody has re-read should look old, because it is.
 
 Three states, deliberately:
 
-  * **2026-08-09** — read from the provider's live pricing page. OpenAI,
-    Google, Mistral, DeepSeek, xAI, Voyage, Cohere (legacy table), and Together
-    (Llama 3.3).
+  * **2026-08-09** — read from the provider's live pricing page. Every active
+    row now sits here.
   * **2026-06-24** — Anthropic, from the vendor's own published rate card,
     which carries that date. Not backdated to today just because it was read
     today; the rate card is what is stale, not the reading of it.
-  * **2026-06-29** — carried from the previous build and *not* re-verified,
-    because the price is not published anywhere a fetch can read it: Amazon
-    Nova (Bedrock pricing is rendered client-side), Jina, Cohere's Embed and
-    Rerank endpoints, Together's BGE/Nomic, and Meta's Llama 4 (absent from
-    Together's serverless list, which is not proof of retirement).
+  * **2026-06-29** — carried from the previous build. Every remaining row on
+    this date is also marked `deprecated`, because re-reading each provider's
+    page is how they were found to be gone: Nova 1, Cohere Embed 3 and Rerank
+    3.5, Jina Reranker v2, Together's BGE and Nomic, and Meta's Llama 4 pair.
+    Their prices are the last figure anyone confirmed, and the date says so.
 
 A row marked `deprecated` here has usually disappeared from its provider's
 current pricing page. That is recorded rather than deleted: someone running
 `deepseek-chat` in production today still needs to see what it costs and what
 replaced it, and a silently missing row would just look like a catalog gap.
+
+Delisting is recorded as `deprecated`, not as a price of zero and not by
+deletion, and the `status_reason` says what replaced it. A calculator that
+quotes a confident number for a model the provider stopped selling is the
+worst outcome available here: it is precise, it is authoritative-looking, and
+it is unbuyable.
 """
 
 from __future__ import annotations
@@ -895,6 +900,10 @@ MODELS: tuple[ModelSeed, ...] = (
         "hf:meta-llama/Llama-4-Maverick",
         "together-pricing",
         VERIFIED_CARRIED,
+        "deprecated",
+        "No longer on Together's serverless price list, so this rate cannot be "
+        "re-checked at its source. The model itself is not retired - it is still "
+        "served elsewhere - but nothing here can confirm what it costs there.",
     ),
     ModelSeed(
         "meta",
@@ -911,6 +920,9 @@ MODELS: tuple[ModelSeed, ...] = (
         "hf:meta-llama/Llama-4-Scout",
         "together-pricing",
         VERIFIED_CARRIED,
+        "deprecated",
+        "No longer on Together's serverless price list. Llama 3.3 70B is still "
+        "listed there at $1.04/$1.04 per 1M.",
     ),
     ModelSeed(
         "meta",
@@ -943,6 +955,9 @@ MODELS: tuple[ModelSeed, ...] = (
         "hf:meta-llama/Llama-3.1-8B-Instruct",
         "together-pricing",
         VERIFIED_CARRIED,
+        "deprecated",
+        "No longer on Together's serverless price list. The nearest listed "
+        "small Llama is Llama 3 8B Instruct Lite at $0.14/$0.14 per 1M.",
     ),
     # ---- DeepSeek -------------------------------------------------------
     ModelSeed(
@@ -1101,6 +1116,26 @@ MODELS: tuple[ModelSeed, ...] = (
         "No longer listed in the xAI model docs.",
     ),
     # ---- Amazon ---------------------------------------------------------
+    # The Bedrock pricing page now lists only Nova 2. AWS publishes a Nova 1 to
+    # Nova 2 migration path, so the whole v1 line below is superseded rather
+    # than merely unlisted. Nova 2 Pro and Omni are on the page too but are
+    # marked Preview, and a preview price is not a price to plan against.
+    ModelSeed(
+        "amazon",
+        "nova-2-lite",
+        "Nova 2 Lite",
+        _CHAT,
+        "0.30",
+        "2.50",
+        None,
+        1_000_000,
+        64_000,
+        None,
+        _TOOLS_VISION,
+        "amazon:api",
+        "aws-bedrock-pricing",
+        VERIFIED_LIVE,
+    ),
     ModelSeed(
         "amazon",
         "nova-pro",
@@ -1116,6 +1151,9 @@ MODELS: tuple[ModelSeed, ...] = (
         "amazon:api",
         "aws-bedrock-pricing",
         VERIFIED_CARRIED,
+        "deprecated",
+        "No longer on the Bedrock pricing page. The Nova 2 line replaces it; "
+        "Nova 2 Pro is in preview, so Nova 2 Lite is the GA option.",
     ),
     ModelSeed(
         "amazon",
@@ -1132,6 +1170,9 @@ MODELS: tuple[ModelSeed, ...] = (
         "amazon:api",
         "aws-bedrock-pricing",
         VERIFIED_CARRIED,
+        "deprecated",
+        "No longer on the Bedrock pricing page. Superseded by Nova 2 Lite, "
+        "which is dearer at $0.30/$2.50 but carries 1M context against 300K.",
     ),
     ModelSeed(
         "amazon",
@@ -1148,6 +1189,9 @@ MODELS: tuple[ModelSeed, ...] = (
         "amazon:api",
         "aws-bedrock-pricing",
         VERIFIED_CARRIED,
+        "deprecated",
+        "No longer on the Bedrock pricing page. Nova 2 has no micro tier; "
+        "Nova 2 Lite is the smallest GA model.",
     ),
     # ---- Embeddings -----------------------------------------------------
     ModelSeed(
@@ -1232,6 +1276,28 @@ MODELS: tuple[ModelSeed, ...] = (
         "google-gemini-pricing",
         VERIFIED_LIVE,
     ),
+    # Cohere's pricing page now lists one retrieval embedder, Embed 4. The v3
+    # pair is kept as deprecated rather than deleted because existing
+    # deployments still call it and an index built on 1024-dim v3 vectors
+    # cannot be re-pointed at a different model without re-embedding.
+    ModelSeed(
+        "cohere",
+        "embed-4",
+        "Embed 4",
+        _EMBED,
+        "0.12",
+        None,
+        None,
+        128_000,
+        None,
+        # Configurable at 256/512/1024/1536; 1536 is the default and the
+        # figure a storage estimate should assume.
+        1536,
+        _TEXT_ONLY,
+        "cohere:api",
+        "cohere-pricing",
+        VERIFIED_LIVE,
+    ),
     ModelSeed(
         "cohere",
         "embed-english-v3",
@@ -1247,6 +1313,9 @@ MODELS: tuple[ModelSeed, ...] = (
         "cohere:api",
         "cohere-pricing",
         VERIFIED_CARRIED,
+        "deprecated",
+        "No longer on Cohere's pricing page. Superseded by Embed 4 at "
+        "$0.12 per 1M, with a 128K context against 512.",
     ),
     ModelSeed(
         "cohere",
@@ -1263,6 +1332,9 @@ MODELS: tuple[ModelSeed, ...] = (
         "cohere:api",
         "cohere-pricing",
         VERIFIED_CARRIED,
+        "deprecated",
+        "No longer on Cohere's pricing page. Embed 4 is multilingual across "
+        "100+ languages and replaces both v3 variants.",
     ),
     ModelSeed(
         "voyage",
@@ -1436,7 +1508,11 @@ MODELS: tuple[ModelSeed, ...] = (
         "jina-embeddings-v3",
         "Jina Embeddings v3",
         _EMBED,
-        "0.02",
+        # Jina sells prepaid token packages rather than metered per-call
+        # pricing, and the rate is one pool shared across embeddings and
+        # rerank. 1B tokens for $50 is the standard tier; the 11B tier works
+        # out at $0.045. The seeded $0.02 was less than half the real rate.
+        "0.05",
         None,
         None,
         8_192,
@@ -1445,7 +1521,7 @@ MODELS: tuple[ModelSeed, ...] = (
         _TEXT_ONLY,
         "hf:jinaai/jina-embeddings-v3",
         "jina-pricing",
-        VERIFIED_CARRIED,
+        VERIFIED_LIVE,
     ),
     ModelSeed(
         "together",
@@ -1462,6 +1538,9 @@ MODELS: tuple[ModelSeed, ...] = (
         "hf:BAAI/bge-large-en-v1.5",
         "together-pricing",
         VERIFIED_CARRIED,
+        "deprecated",
+        "Together's serverless embeddings list is now a single model, "
+        "Multilingual E5 Large Instruct at $0.02 per 1M.",
     ),
     ModelSeed(
         "together",
@@ -1478,8 +1557,67 @@ MODELS: tuple[ModelSeed, ...] = (
         "hf:nomic-ai/nomic-embed-text-v1.5",
         "together-pricing",
         VERIFIED_CARRIED,
+        "deprecated",
+        "Together's serverless embeddings list is now a single model, "
+        "Multilingual E5 Large Instruct at $0.02 per 1M.",
+    ),
+    # The one embedding model Together still serves serverless. Added when the
+    # other two were deprecated: leaving the provider with nothing would have
+    # dropped it out of the embedding-cost comparison entirely, which reads as
+    # "Together does not do embeddings" rather than "their catalogue shrank".
+    ModelSeed(
+        "together",
+        "multilingual-e5-large-instruct",
+        "Multilingual E5 Large Instruct",
+        _EMBED,
+        "0.02",
+        None,
+        None,
+        512,
+        None,
+        1024,
+        _TEXT_ONLY,
+        "hf:intfloat/multilingual-e5-large-instruct",
+        "together-pricing",
+        VERIFIED_LIVE,
     ),
     # ---- Rerank ---------------------------------------------------------
+    # Rerank is priced per 1K searches, not per 1M tokens - one search being
+    # one query against up to 100 documents. The figure sits in the same field
+    # as a token price because the family already tells the calculators which
+    # unit to apply.
+    ModelSeed(
+        "cohere",
+        "rerank-4-fast",
+        "Rerank 4 Fast",
+        _RERANK,
+        "2.00",
+        None,
+        None,
+        32_768,
+        None,
+        None,
+        _TEXT_ONLY,
+        "cohere:api",
+        "cohere-pricing",
+        VERIFIED_LIVE,
+    ),
+    ModelSeed(
+        "cohere",
+        "rerank-4-pro",
+        "Rerank 4 Pro",
+        _RERANK,
+        "2.50",
+        None,
+        None,
+        32_768,
+        None,
+        None,
+        _TEXT_ONLY,
+        "cohere:api",
+        "cohere-pricing",
+        VERIFIED_LIVE,
+    ),
     ModelSeed(
         "cohere",
         "rerank-v3.5",
@@ -1495,6 +1633,9 @@ MODELS: tuple[ModelSeed, ...] = (
         "cohere:api",
         "cohere-pricing",
         VERIFIED_CARRIED,
+        "deprecated",
+        "No longer on Cohere's pricing page. Rerank 4 Fast is the same "
+        "$2.00 per 1K searches with an 8x larger context.",
     ),
     ModelSeed(
         "cohere",
@@ -1511,6 +1652,9 @@ MODELS: tuple[ModelSeed, ...] = (
         "cohere:api",
         "cohere-pricing",
         VERIFIED_CARRIED,
+        "deprecated",
+        "No longer on Cohere's pricing page. The Rerank 4 family is "
+        "multilingual across 100+ languages.",
     ),
     ModelSeed(
         "voyage",
@@ -1577,5 +1721,9 @@ MODELS: tuple[ModelSeed, ...] = (
         "hf:jinaai/jina-reranker-v2-base-multilingual",
         "jina-pricing",
         VERIFIED_CARRIED,
+        "deprecated",
+        "No longer in Jina's published model list, which now runs "
+        "jina-reranker-v3 and v3.5. The rate shown also predates their move "
+        "to $0.05 per 1M, so it understates the cost as well.",
     ),
 )

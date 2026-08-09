@@ -29,7 +29,6 @@ from app.core.database import new_id, utcnow
 from app.core.logging import get_logger
 from app.data.compatibility_seed import build_pairs
 from app.data.gpus_seed import GPUS
-from app.data.gpus_seed import VERIFIED as GPU_VERIFIED
 from app.data.models_seed import MODELS
 from app.data.sources import SOURCES
 from app.data.tools_seed import REVIEWED as TOOLS_REVIEWED
@@ -247,7 +246,6 @@ async def _seed_gpus(
         for row in (await db.execute(select(GpuPricing))).scalars().all()
     }
     inserted = updated = skipped = 0
-    verified = _at_midnight(GPU_VERIFIED)
 
     for seed in GPUS:
         source = sources[seed.source]
@@ -262,7 +260,11 @@ async def _seed_gpus(
             "ram_gb": seed.ram_gb,
             "hourly_cost_usd": hourly,
             "source_id": source.id,
-            "last_verified_at": verified,
+            # Per row, not per file: auction-cleared rows keep an older date
+            # than list-price rows because nobody can verify them the same
+            # way. A single date for the file would quietly promote a
+            # marketplace guess to the standing of a published rate card.
+            "last_verified_at": _at_midnight(seed.verified),
         }
 
         if current is None:

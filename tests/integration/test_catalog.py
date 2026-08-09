@@ -118,9 +118,9 @@ async def test_gpu_list_returns_real_hourly_and_monthly(client: AsyncClient) -> 
     by_name = {item["instance_name"]: item for item in response.json()["data"]}
 
     single = by_name["gpu_1x_h100_pcie"]
-    assert single["hourly_cost_usd"] == "2.490000"
-    # 2.49 * 730 hours
-    assert single["monthly_cost_usd"] == "1817.70"
+    assert single["hourly_cost_usd"] == "3.290000"
+    # 3.29 * 730 hours
+    assert single["monthly_cost_usd"] == "2401.70"
     assert single["vram_total_gb"] == 80
 
 
