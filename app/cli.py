@@ -57,6 +57,12 @@ def _seed() -> None:
             )
         print(f"\ninserted {report.total_inserted}, updated {report.total_updated}")
 
+        if report.unmanaged:
+            print(f"\n{len(report.unmanaged)} row(s) the seed no longer describes:")
+            for row in report.unmanaged:
+                print(f"  {row}")
+            print("Usually a renamed id. Nothing was deleted — decide and edit the seed.")
+
     asyncio.run(run())
 
 

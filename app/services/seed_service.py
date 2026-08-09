@@ -47,6 +47,8 @@ class SeedReport:
     inserted: dict[str, int] = field(default_factory=dict)
     updated: dict[str, int] = field(default_factory=dict)
     skipped: dict[str, int] = field(default_factory=dict)
+    #: Rows in the database that the seed no longer describes.
+    unmanaged: list[str] = field(default_factory=list)
 
     @property
     def total_inserted(self) -> int:
@@ -85,11 +87,13 @@ async def seed_all(db: AsyncSession, *, refresh: bool = False) -> SeedReport:
     await _seed_tools(db, report, refresh=refresh)
     await db.flush()
     await _seed_compatibility(db, report, refresh=refresh)
+    await _find_unmanaged(db, report)
 
     logger.info(
         "seed.complete",
         inserted=report.total_inserted,
         updated=report.total_updated,
+        unmanaged=len(report.unmanaged),
         refresh=refresh,
     )
     if report.total_inserted or report.total_updated:
@@ -306,6 +310,38 @@ async def _seed_compatibility(db: AsyncSession, report: SeedReport, *, refresh: 
             skipped += 1
 
     report.note("compatibility_matrix", inserted, updated, skipped)
+
+
+async def _find_unmanaged(db: AsyncSession, report: SeedReport) -> None:
+    """Rows the seed no longer describes.
+
+    Renaming a `model_id` — which happens every time a provider version-stamps
+    its API ids — inserts the new row and silently orphans the old one. The
+    orphan then sits there at its last verification date, ages into looking
+    stale, and nothing ever updates it because no seed entry claims it.
+
+    These are reported, never deleted. A row could be orphaned because a
+    provider retired it, or because someone fat-fingered an id in the seed
+    file, and deleting priced history on that ambiguity is not a trade worth
+    making automatically.
+    """
+    seeded_models = {(seed.provider, seed.model_id) for seed in MODELS}
+    for row in (await db.execute(select(ModelPricing))).scalars().all():
+        if (row.provider, row.model_id) not in seeded_models:
+            report.unmanaged.append(f"model_pricing: {row.provider}/{row.model_id}")
+
+    seeded_gpus = {(seed.provider, seed.instance_name, seed.region, seed.spot) for seed in GPUS}
+    for gpu in (await db.execute(select(GpuPricing))).scalars().all():
+        if (gpu.provider, gpu.instance_name, gpu.region, gpu.spot) not in seeded_gpus:
+            report.unmanaged.append(f"gpu_pricing: {gpu.provider}/{gpu.instance_name}")
+
+    seeded_tools = {seed.slug for seed in TOOLS}
+    for tool in (await db.execute(select(Tool))).scalars().all():
+        if tool.slug not in seeded_tools:
+            report.unmanaged.append(f"tool_catalog: {tool.slug}")
+
+    if report.unmanaged:
+        logger.warning("seed.unmanaged_rows", rows=report.unmanaged)
 
 
 async def seed_if_empty(db: AsyncSession) -> SeedReport | None:

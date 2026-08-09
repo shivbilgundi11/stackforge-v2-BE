@@ -639,3 +639,52 @@ async def test_accepting_a_change_is_what_moves_the_price(db: AsyncSession) -> N
 
     assert model.input_cost_per_1k == Decimal("0.000200")
     assert history.applied is True
+
+
+async def test_a_renamed_model_id_is_reported_not_silently_orphaned(
+    db: AsyncSession,
+) -> None:
+    """Renaming an id inserts the new row and orphans the old one.
+
+    The orphan then ages into looking stale while nothing updates it, because
+    no seed entry claims it. Reported, never deleted — a row can be orphaned
+    by a real retirement or by a typo in the seed, and deleting priced history
+    on that ambiguity is not a trade worth making automatically.
+    """
+    from app.core.database import new_id
+    from app.models.catalog import DataSource
+    from app.services.seed_service import seed_all
+
+    source = (
+        await db.execute(select(DataSource).where(DataSource.slug == "openai-pricing"))
+    ).scalar_one()
+    db.add(
+        ModelPricing(
+            id=new_id("mdl"),
+            provider="openai",
+            model_id="gpt-4o-mini-old-id",
+            display_name="Renamed away",
+            family="chat",
+            input_cost_per_1k=Decimal("0.000150"),
+            capabilities={},
+            source_id=source.id,
+            last_verified_at=utcnow(),
+        )
+    )
+    await db.flush()
+
+    report = await seed_all(db)
+
+    assert "model_pricing: openai/gpt-4o-mini-old-id" in report.unmanaged
+    # And it is still there afterwards.
+    survivor = (
+        await db.execute(select(ModelPricing).where(ModelPricing.model_id == "gpt-4o-mini-old-id"))
+    ).scalar_one_or_none()
+    assert survivor is not None
+
+
+async def test_a_clean_catalog_reports_no_unmanaged_rows(db: AsyncSession) -> None:
+    from app.services.seed_service import seed_all
+
+    report = await seed_all(db)
+    assert report.unmanaged == []
