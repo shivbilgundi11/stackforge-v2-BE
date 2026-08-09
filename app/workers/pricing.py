@@ -1,20 +1,24 @@
-"""Daily price verification. 03:00 UTC.
+"""Price staleness reporting, and the editorial accept path.
 
-The job's contract, and the reason it is worth having:
+**No fetchers ship, and none are planned.** Prices are hardcoded in
+`app/data/` and verified by a human reading the provider's published page
+(D-16). Automated scraping was considered and rejected: a scraper misreading a
+pricing page silently corrupts every downstream estimate, and this product's
+entire claim is that its numbers are right. Reading a page and editing a seed
+file costs minutes and cannot fail silently.
 
-  1. For each source, read the currently published price.
-  2. Compare against what the catalog holds.
-  3. **Record the difference. Never apply it.**
-  4. Write `pricing_history` rows and raise an editorial alert.
-  5. On fetch failure, keep the last good value, increment `failure_count`,
-     and alert after three consecutive failures.
+What survives here, and why it is still worth having:
 
-Step 3 is the whole design. See `provenance_service` for why.
+  * `apply_change` — the editorial accept: takes a recorded change and writes
+    it to the row. The one place a `pricing_history` entry becomes a price.
+  * `verify_all` — walks the sources and reports. With no fetchers registered
+    every source is *skipped*, which is the honest outcome: it tells an
+    operator how many sources exist and that none is machine-readable, rather
+    than reporting a clean run over zero work.
 
-Fetchers are registered per source slug. A source with no registered fetcher is
-skipped rather than failed — an unregistered source means "nobody has written
-the parser yet", which is not the same as "the page is down", and conflating
-the two would make `failure_count` meaningless.
+The fetcher registry is kept because the shape is right if this decision is
+ever revisited, and because the tests pin the contract that a fetcher must
+never mutate a price — only record what it saw.
 """
 
 from __future__ import annotations

@@ -191,9 +191,17 @@ class DriftEntryOut(BaseModel):
 
 
 class RefreshResultOut(BaseModel):
+    """The editorial queue.
+
+    `sources_skipped` is the honest headline while prices are hand-verified:
+    it is the count of sources no machine reads, which is all of them.
+    """
+
     checked: int
     changes_detected: int
     sources_failed: int
+    sources_skipped: int = 0
+    stale_rows: int = 0
     entries: list[DriftEntryOut] = Field(default_factory=list)
     ran_at: datetime
 

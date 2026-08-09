@@ -688,3 +688,38 @@ async def test_a_clean_catalog_reports_no_unmanaged_rows(db: AsyncSession) -> No
 
     report = await seed_all(db)
     assert report.unmanaged == []
+
+
+async def test_a_refresh_records_every_price_it_changes(db: AsyncSession) -> None:
+    """The seed file is the only path by which a price changes, so it has to
+    leave the same audit trail as any other change to one."""
+    from app.services.seed_service import seed_all
+
+    model = (
+        await db.execute(select(ModelPricing).where(ModelPricing.model_id == "gpt-4o-mini"))
+    ).scalar_one()
+    model.input_cost_per_1k = Decimal("0.000300")  # pretend the seed moved
+    await db.flush()
+
+    report = await seed_all(db, refresh=True)
+    await db.flush()
+    await db.refresh(model)
+
+    assert report.price_changes >= 1
+    assert model.input_cost_per_1k == Decimal("0.000150")  # back to the seed
+
+    history = await provenance_service.history_for(db, entity_id=model.id)
+    entry = next(h for h in history if h.field == "input_cost_per_1k")
+    assert entry.old_value == Decimal("0.000300")
+    assert entry.new_value == Decimal("0.000150")
+    assert entry.pct_change == Decimal("-50.0000")
+    # Already applied, unlike a drift row awaiting review.
+    assert entry.applied is True
+
+
+async def test_a_refresh_that_changes_nothing_records_nothing(db: AsyncSession) -> None:
+    """Re-running a deploy must not fill the history with no-op rows."""
+    from app.services.seed_service import seed_all
+
+    report = await seed_all(db, refresh=True)
+    assert report.price_changes == 0

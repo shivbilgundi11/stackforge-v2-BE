@@ -157,13 +157,18 @@ async def refresh_pricing(
     _admin: AdminUser,
     source: str | None = None,
 ) -> dict[str, Any]:
-    """Runs the verification job now.
+    """Report what needs an editor's attention.
 
-    Records what the sources currently publish. Does not change a single
-    price — accepting a change is a separate, deliberate action.
+    Prices are hardcoded and verified by hand (D-16), so this endpoint reads
+    rather than writes: it never changes a price, and with no fetchers
+    registered it never will. What it returns is the editorial queue — recent
+    unapplied drift, and how many rows are past their freshness window.
+
+    Kept as POST rather than GET because it walks every source and every
+    priced row, which is not something to hand a crawler.
     """
     result = await pricing_worker.verify_all(db, source_slug=source)
-    entries = await provenance_service.detect_drift(db, since=result.ran_at - timedelta(minutes=5))
+    entries = await provenance_service.detect_drift(db, since=utcnow() - timedelta(days=90))
     if result.changes_detected:
         await catalog_service.invalidate()
     return ok(
@@ -171,6 +176,8 @@ async def refresh_pricing(
             checked=result.checked,
             changes_detected=result.changes_detected,
             sources_failed=result.sources_failed,
+            sources_skipped=result.sources_skipped,
+            stale_rows=await provenance_service.stale_rows(db),
             entries=entries,
             ran_at=result.ran_at,
         )

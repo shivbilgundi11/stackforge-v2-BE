@@ -8,6 +8,12 @@ deploy makes the review process pointless.
 
 The rule is: insert what is missing, leave what exists. `--refresh` opts into
 overwriting, for the case where the seed file itself is the correction.
+
+**These files are the only way a price ever changes.** Prices are hardcoded and
+verified by hand against the provider's published page — no pricing APIs, no
+scrapers (D-16). That makes `--refresh` the single write path for a price, so
+it records every movement it makes into `pricing_history`: an edit here is an
+editorial decision, and it leaves the same audit trail as any other.
 """
 
 from __future__ import annotations
@@ -33,9 +39,10 @@ from app.models.catalog import (
     DataSource,
     GpuPricing,
     ModelPricing,
+    PricedEntity,
     Tool,
 )
-from app.services import catalog_service
+from app.services import catalog_service, provenance_service
 
 logger = get_logger("seed")
 
@@ -49,6 +56,8 @@ class SeedReport:
     skipped: dict[str, int] = field(default_factory=dict)
     #: Rows in the database that the seed no longer describes.
     unmanaged: list[str] = field(default_factory=list)
+    #: Price movements this refresh wrote to `pricing_history`.
+    price_changes: int = 0
 
     @property
     def total_inserted(self) -> int:
@@ -62,6 +71,42 @@ class SeedReport:
         self.inserted[table] = inserted
         self.updated[table] = updated
         self.skipped[table] = skipped
+
+
+async def _record_price_changes(
+    db: AsyncSession,
+    *,
+    entity_type: PricedEntity,
+    entity_id: str,
+    source_id: str,
+    changes: dict[str, tuple[Decimal | None, Decimal | None]],
+    report: SeedReport,
+) -> None:
+    """Write a `pricing_history` row for every price this refresh moves.
+
+    Prices are hardcoded and verified by hand, which makes this file the only
+    path by which a price ever changes. A `setattr` that silently drops the old
+    value would leave that path as the one part of the system with no audit
+    trail — no way to answer "when did Mistral Large get cheaper, and by how
+    much", which is exactly the question the history table was added for.
+
+    Marked `applied=True`, unlike the drift rows: this is a change that has
+    already been made, not one awaiting review.
+    """
+    for field_name, (old, new) in changes.items():
+        if old == new:
+            continue
+        await provenance_service.record_change(
+            db,
+            entity_type=entity_type,
+            entity_id=entity_id,
+            field=field_name,
+            old_value=old,
+            new_value=new,
+            source_id=source_id,
+            applied=True,
+        )
+        report.price_changes += 1
 
 
 def _at_midnight(day: date) -> datetime:
@@ -93,6 +138,7 @@ async def seed_all(db: AsyncSession, *, refresh: bool = False) -> SeedReport:
         "seed.complete",
         inserted=report.total_inserted,
         updated=report.total_updated,
+        price_changes=report.price_changes,
         unmanaged=len(report.unmanaged),
         refresh=refresh,
     )
@@ -138,12 +184,18 @@ async def _seed_models(
     for seed in MODELS:
         source = sources[seed.source]
         current = existing.get((seed.provider, seed.model_id))
-        values = {
-            "display_name": seed.display_name,
-            "family": seed.family,
+        # Kept as typed locals as well as dict entries: the change record needs
+        # `Decimal | None`, and the values dict is heterogeneous enough that
+        # reading them back out of it loses the type.
+        prices: dict[str, Decimal | None] = {
             "input_cost_per_1k": _per_1k(seed.input_per_m),
             "output_cost_per_1k": _per_1k(seed.output_per_m),
             "cached_input_cost_per_1k": _per_1k(seed.cached_input_per_m),
+        }
+        values = {
+            "display_name": seed.display_name,
+            "family": seed.family,
+            **prices,
             "context_window": seed.context_window,
             "max_output_tokens": seed.max_output_tokens,
             "dimensions": seed.dimensions,
@@ -166,6 +218,14 @@ async def _seed_models(
             )
             inserted += 1
         elif refresh:
+            await _record_price_changes(
+                db,
+                entity_type=PricedEntity.MODEL,
+                entity_id=current.id,
+                source_id=source.id,
+                changes={name: (getattr(current, name), price) for name, price in prices.items()},
+                report=report,
+            )
             for key, value in values.items():
                 setattr(current, key, value)
             updated += 1
@@ -193,13 +253,14 @@ async def _seed_gpus(
         source = sources[seed.source]
         key = (seed.provider, seed.instance_name, seed.region, seed.spot)
         current = existing.get(key)
+        hourly = Decimal(seed.hourly)
         values = {
             "gpu_model": seed.gpu_model,
             "gpu_count": seed.gpu_count,
             "vram_gb": seed.vram_gb,
             "vcpu": seed.vcpu,
             "ram_gb": seed.ram_gb,
-            "hourly_cost_usd": Decimal(seed.hourly),
+            "hourly_cost_usd": hourly,
             "source_id": source.id,
             "last_verified_at": verified,
         }
@@ -217,6 +278,14 @@ async def _seed_gpus(
             )
             inserted += 1
         elif refresh:
+            await _record_price_changes(
+                db,
+                entity_type=PricedEntity.GPU,
+                entity_id=current.id,
+                source_id=source.id,
+                changes={"hourly_cost_usd": (current.hourly_cost_usd, hourly)},
+                report=report,
+            )
             for attr, value in values.items():
                 setattr(current, attr, value)
             updated += 1

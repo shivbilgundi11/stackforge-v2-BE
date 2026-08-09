@@ -56,6 +56,8 @@ def _seed() -> None:
                 f"={report.skipped.get(table, 0)}"
             )
         print(f"\ninserted {report.total_inserted}, updated {report.total_updated}")
+        if report.price_changes:
+            print(f"{report.price_changes} price change(s) recorded in pricing_history")
 
         if report.unmanaged:
             print(f"\n{len(report.unmanaged)} row(s) the seed no longer describes:")
