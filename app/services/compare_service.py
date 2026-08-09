@@ -31,6 +31,24 @@ from app.schemas.catalog import ModelOut, ToolOut
 from app.schemas.tools import ToolOutput, ToolWarning
 
 CENTS = Decimal("0.01")
+
+
+def _money_from(display: str) -> Decimal:
+    """Read a `$1,234.56` display string back to a Decimal."""
+    return Decimal(display.replace("$", "").replace(",", ""))
+
+
+def _usd(value: Decimal) -> str:
+    """A display string with thousands separators.
+
+    These land straight in the matrix cell, so `$49920.00` versus `$49,920.00`
+    is the difference between a figure the reader parses and one they squint
+    at. Grouping happens here because the cell is a pre-formatted string by
+    the time the frontend sees it.
+    """
+    return f"${value.quantize(CENTS):,.2f}"
+
+
 DAYS_PER_MONTH = Decimal("30.4375")
 THOUSAND = Decimal(1000)
 
@@ -247,7 +265,7 @@ def compare_models(
             "freshness": 100.0 if model.status == "active" else 25.0,
         }
         raw[model.model_id] = {
-            "blended_cost": f"${monthly}/mo",
+            "blended_cost": f"{_usd(monthly)}/mo",
             "context_window": f"{model.context_window:,}" if model.context_window else "-",
             "cache_support": (
                 f"${model.cached_input_cost_per_1k}/1k" if model.cached_input_cost_per_1k else "no"
@@ -274,13 +292,13 @@ def compare_models(
         if cheapest["id"] != winner["id"]:
             delta = Decimal(winner["monthly_cost"]) - Decimal(cheapest["monthly_cost"])
             tradeoffs.append(
-                f"It costs ${delta.quantize(CENTS)}/month more than "
+                f"It costs {_usd(delta)}/month more than "
                 f"{cheapest['name']}, the cheapest option here."
             )
             switch.append(
                 f"Choose {cheapest['name']} if this workload is cost-bound and its "
                 f"quality is good enough on your evals — it is "
-                f"${delta.quantize(CENTS)}/month cheaper at this volume."
+                f"{_usd(delta)}/month cheaper at this volume."
             )
         if widest["id"] != winner["id"] and widest["context_window"]:
             switch.append(
@@ -371,7 +389,7 @@ def compare_vector_db(
             "lifecycle": STATUS_MULTIPLIER.get(tool.status, 1.0) * 100,
         }
         raw[tool.slug] = {
-            "monthly_cost": f"${monthly}/mo",
+            "monthly_cost": f"{_usd(monthly)}/mo",
             "ops_burden": f"{facts.get('ops_burden', 3)}/5",
             "filtering": f"{facts.get('filtering', 3)}/5",
             "hybrid_search": "yes" if facts.get("hybrid_search") else "no",
@@ -401,9 +419,7 @@ def compare_vector_db(
             )
         if cheapest["id"] != winner["id"]:
             delta = Decimal(winner["monthly_cost"]) - Decimal(cheapest["monthly_cost"])
-            tradeoffs.append(
-                f"${delta.quantize(CENTS)}/month more than {cheapest['name']} at this scale."
-            )
+            tradeoffs.append(f"{_usd(delta)}/month more than {cheapest['name']} at this scale.")
         if vector_count <= 5_000_000 and winner["id"] != "pgvector":
             switch.append(
                 "Choose pgvector if you already run Postgres: under about 5M vectors "
@@ -511,7 +527,7 @@ def compare_stacks(
             "operational_burden": (5 - archetype.ops_burden) / 4 * 100,
         }
         raw[archetype.key] = {
-            "tco_12_month": f"${total}",
+            "tco_12_month": _usd(total),
             "time_to_deploy": f"{archetype.setup_days} days",
             "scaling_ceiling": f"{archetype.scaling_ceiling}/5",
             "vendor_lock_in": f"{archetype.lock_in}/5",
@@ -523,7 +539,7 @@ def compare_stacks(
         winner: dict[str, Any], ranked: list[dict[str, Any]], priority: Priority
     ) -> tuple[str, list[str], list[str]]:
         fastest = min(ranked, key=lambda o: o["setup_days"])
-        cheapest = min(ranked, key=lambda o: Decimal(o["tco_12_month"]))
+        cheapest = min(ranked, key=lambda o: _money_from(o["tco_12_month"]))
         why = (
             f"{winner['name']} wins on a {priority} weighting: "
             f"${winner['tco_12_month']} over twelve months including engineering "
@@ -540,12 +556,10 @@ def compare_stacks(
                 f"{fastest['setup_days']} days rather than {winner['setup_days']}."
             )
         if cheapest["id"] != winner["id"]:
-            saving = (Decimal(winner["tco_12_month"]) - Decimal(cheapest["tco_12_month"])).quantize(
-                CENTS
-            )
+            saving = _money_from(winner["tco_12_month"]) - _money_from(cheapest["tco_12_month"])
             switch.append(
                 f"Choose {cheapest['name']} if the twelve-month budget is fixed — "
-                f"it is ${saving} less."
+                f"it is {_usd(saving)} less."
             )
         switch.append(
             "Choose the self-hosted archetype if data residency is a hard "
@@ -652,16 +666,16 @@ def compare_build_vs_buy(
     }
     raw = {
         "build": {
-            "total_cost_12m": f"${horizons[12][0]}",
-            "total_cost_36m": f"${horizons[36][0]}",
+            "total_cost_12m": _usd(horizons[12][0]),
+            "total_cost_36m": _usd(horizons[36][0]),
             "time_to_value": f"{build_months_to_value.quantize(CENTS)} months",
             "control": "full",
             "risk": "delivery risk on your team",
             "maintenance": f"{maintenance_hours_per_month}h/month",
         },
         "buy": {
-            "total_cost_12m": f"${horizons[12][1]}",
-            "total_cost_36m": f"${horizons[36][1]}",
+            "total_cost_12m": _usd(horizons[12][1]),
+            "total_cost_36m": _usd(horizons[36][1]),
             "time_to_value": f"{buy_months_to_value.quantize(CENTS)} months",
             "control": "vendor roadmap",
             "risk": "vendor viability",
@@ -685,9 +699,9 @@ def compare_build_vs_buy(
             sensitivity.append(
                 {
                     "build_hours": int(hours),
-                    "hourly_rate": str(rate.quantize(CENTS)),
-                    "build_36m": str(build_36),
-                    "buy_36m": str(buy_36),
+                    "hourly_rate": _usd(rate),
+                    "build_36m": _usd(build_36),
+                    "buy_36m": _usd(buy_36),
                     "winner": "build" if build_36 < buy_36 else "buy",
                 }
             )
@@ -707,22 +721,22 @@ def compare_build_vs_buy(
         flips = {row["winner"] for row in sensitivity}
         if winner["id"] == "buy":
             why = (
-                f"Buy wins on a {priority} weighting: ${horizons[12][1]} against "
-                f"${horizons[12][0]} over twelve months, and it is in production "
+                f"Buy wins on a {priority} weighting: {_usd(horizons[12][1])} against "
+                f"{_usd(horizons[12][0])} over twelve months, and it is in production "
                 f"months earlier."
             )
             tradeoffs = [
                 "You inherit the vendor's roadmap, pricing changes, and outages.",
-                f"At ${vendor_monthly.quantize(CENTS)}/month the cost never stops, "
+                f"At {_usd(vendor_monthly)}/month the cost never stops, "
                 f"whereas a build's largest cost is upfront.",
             ]
         else:
             why = (
-                f"Build wins on a {priority} weighting: ${horizons[36][0]} against "
-                f"${horizons[36][1]} over three years."
+                f"Build wins on a {priority} weighting: {_usd(horizons[36][0])} against "
+                f"{_usd(horizons[36][1])} over three years."
             )
             tradeoffs = [
-                f"${build_upfront} of engineering time before anything ships.",
+                f"{_usd(build_upfront)} of engineering time before anything ships.",
                 f"{maintenance_hours_per_month}h/month of maintenance forever, "
                 f"which is the cost most build cases forget.",
             ]

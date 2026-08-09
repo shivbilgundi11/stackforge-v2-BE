@@ -171,8 +171,13 @@ def test_a_cost_report_artifact_is_generated() -> None:
     assert "2026-08-09" in artifact.content  # the provenance date, not today's
 
 
-def test_sourced_from_carries_the_rows_that_were_read() -> None:
-    """`run_tool` turns this into the provenance block."""
+def test_provenance_covers_the_headline_rows_only() -> None:
+    """`run_tool` turns this into the provenance chips.
+
+    The alternatives table reads a dozen other rows, but attributing all of
+    them to the headline figure produced nine chips for a one-model answer and
+    let an unrelated provider's stale row set the freshness variant.
+    """
     other = model(model_id="gpt-5-mini")
     result = cost_service.llm_pricing(
         model=model(),
@@ -181,8 +186,7 @@ def test_sourced_from_carries_the_rows_that_were_read() -> None:
         requests_per_day=1,
         alternatives=[other],
     )
-    assert "mdl_gpt-4o-mini" in result.sourced_from
-    assert "mdl_gpt-5-mini" in result.sourced_from
+    assert result.sourced_from == ["mdl_gpt-4o-mini"]
 
 
 # ── token-calculator ─────────────────────────────────────────────────────────

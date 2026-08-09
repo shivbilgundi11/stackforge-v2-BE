@@ -404,8 +404,11 @@ def test_sensitivity_table_covers_the_argued_range() -> None:
     assert len(sensitivity) == 15  # 5 hour factors x 3 rates
     assert {row["winner"] for row in sensitivity} <= {"build", "buy"}
     for row in sensitivity:
-        assert Decimal(row["build_36m"]) > 0
-        assert Decimal(row["buy_36m"]) > 0
+        # Display strings, grouped: "$46,620.00". They land straight in a
+        # matrix cell, so the grouping is part of the contract.
+        assert row["build_36m"].startswith("$")
+        assert compare_service._money_from(row["build_36m"]) > 0
+        assert compare_service._money_from(row["buy_36m"]) > 0
 
 
 def test_cumulative_projection_spans_36_months() -> None:

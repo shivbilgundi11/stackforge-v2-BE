@@ -157,7 +157,12 @@ def llm_pricing(
 
     projection = [{"month": month, "cost": str(_display(monthly))} for month in range(1, 13)]
 
-    sourced = [model.id, *(candidate.id for candidate in comparable)]
+    # Only the selected model. The alternatives table is derived data whose
+    # figures are attributed per row; folding every candidate's source into
+    # the headline provenance produced nine chips for a one-model answer and
+    # took the freshness variant from whichever unrelated provider happened
+    # to be oldest.
+    sourced = [model.id]
 
     return ToolOutput(
         metrics={
@@ -179,6 +184,13 @@ def llm_pricing(
     )
 
 
+def _usd(amount: object) -> str:
+    """`-$414.27`, not `$-414.27`. The sign belongs outside the symbol."""
+    value = Decimal(str(amount))
+    sign = "-" if value < 0 else ""
+    return f"{sign}${abs(value):,.2f}"
+
+
 def _cost_report(
     model: ModelOut,
     per_request: Decimal,
@@ -191,9 +203,9 @@ def _cost_report(
         f"# Cost estimate — {model.display_name}",
         "",
         f"- **Per request:** ${per_request}",
-        f"- **Daily:** ${_display(daily)}",
-        f"- **Monthly:** ${_display(monthly)}",
-        f"- **Annual:** ${_display(annual)}",
+        f"- **Daily:** {_usd(daily)}",
+        f"- **Monthly:** {_usd(monthly)}",
+        f"- **Annual:** {_usd(annual)}",
         "",
         f"Pricing verified {model.provenance.last_verified_at.date()} "
         f"({model.provenance.source_name}).",
@@ -207,8 +219,8 @@ def _cost_report(
             "| --- | --- | ---: | ---: |",
         ]
         lines += [
-            f"| {row['model']} | {row['provider']} | ${row['monthly_cost']} "
-            f"| ${row['delta_vs_selected']} |"
+            f"| {row['model']} | {row['provider']} | {_usd(row['monthly_cost'])} "
+            f"| {_usd(row['delta_vs_selected'])} |"
             for row in alternatives[:10]
         ]
     return Artifact(
@@ -329,7 +341,7 @@ def token_calculator(
         },
         tables={"context_fit": rows},
         warnings=warnings,
-        sourced_from=[model.id, *(candidate.id for candidate in (candidates or []))],
+        sourced_from=[model.id],
     )
 
 
@@ -420,7 +432,7 @@ def embedding_cost(
         },
         tables={"provider_comparison": rows},
         warnings=warnings,
-        sourced_from=[model.id, *(candidate.id for candidate in (alternatives or []))],
+        sourced_from=[model.id],
     )
 
 
