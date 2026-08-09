@@ -114,6 +114,27 @@ class GraveyardEntryOut(ToolOut):
     alternative_tools: list[ToolOut] = Field(default_factory=list)
 
 
+class ArchitectureOut(BaseModel):
+    """A model's shape, for VRAM estimation.
+
+    `uses_gqa` is computed rather than left to the client: the KV cache scales
+    with `kv_heads`, and a caller that compares the wrong pair of fields gets
+    an answer that is wrong by the group size.
+    """
+
+    key: str
+    name: str
+    family: str
+    params_b: float
+    layers: int
+    hidden_size: int
+    heads: int
+    kv_heads: int
+    head_dim: int
+    max_context: int
+    uses_gqa: bool
+
+
 class CompatibilityPairOut(BaseModel):
     tool_a: str
     tool_b: str

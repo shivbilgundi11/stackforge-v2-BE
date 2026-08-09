@@ -29,6 +29,7 @@ dependencies = [
     "tzdata>=2024.2",
     "pypdf>=6.15.0",
     "python-multipart>=0.0.32",
+    "pyyaml>=6.0.3",
 ]
 
 [dependency-groups]
@@ -41,6 +42,8 @@ dev = [
     "ruff>=0.8",
     "mypy>=1.13",
     "asgi-lifespan>=2.1",
+    "types-pyyaml>=6.0.12.20260724",
+    "kubernetes>=36.0.3",
 ]
 
 [tool.uv]

@@ -20,8 +20,10 @@ from app.core.database import new_id, utcnow
 from app.core.errors import ValidationFailed
 from app.core.logging import get_logger
 from app.core.responses import Envelope, ok
+from app.data.architectures_seed import ARCHITECTURES
 from app.models.catalog import CatalogFlag
 from app.schemas.catalog import (
+    ArchitectureOut,
     CatalogStatsOut,
     CompatibilityOut,
     FlagIn,
@@ -111,6 +113,38 @@ async def get_compatibility(
         # and the request starts being a way to make the server do work.
         raise ValidationFailed("Compare at most 12 tools at once.")
     return ok(await catalog_service.get_compatibility(db, slugs))
+
+
+@router.get(
+    "/architectures",
+    response_model=Envelope[list[ArchitectureOut]],
+    name="list_architectures",
+)
+async def list_architectures() -> dict[str, Any]:
+    """Open-weight model architectures, for VRAM estimation.
+
+    No database and no provenance chip. These are physical properties fixed at
+    publication — a layer count cannot go stale — so the freshness machinery
+    that surrounds every price would be answering a question nobody has.
+    """
+    return ok(
+        [
+            ArchitectureOut(
+                key=arch.key,
+                name=arch.name,
+                family=arch.family,
+                params_b=arch.params_b,
+                layers=arch.layers,
+                hidden_size=arch.hidden_size,
+                heads=arch.heads,
+                kv_heads=arch.kv_heads,
+                head_dim=arch.head_dim,
+                max_context=arch.max_context,
+                uses_gqa=arch.uses_gqa,
+            )
+            for arch in ARCHITECTURES
+        ]
+    )
 
 
 @router.get("/graveyard", response_model=Envelope[list[GraveyardEntryOut]], name="get_graveyard")
