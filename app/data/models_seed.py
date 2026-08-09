@@ -60,6 +60,10 @@ class ModelSeed(NamedTuple):
     verified: date
     status: str = "active"
     status_reason: str | None = None
+    # What `input_per_m` is a price of (D-18). "searches" for Cohere rerank,
+    # which publishes per 1K searches rather than per 1M tokens - the same
+    # column, a different unit, and nothing in the number itself to say so.
+    price_unit: str = "tokens"
 
 
 _CHAT = "chat"
@@ -1601,6 +1605,7 @@ MODELS: tuple[ModelSeed, ...] = (
         "cohere:api",
         "cohere-pricing",
         VERIFIED_LIVE,
+        price_unit="searches",
     ),
     ModelSeed(
         "cohere",
@@ -1617,6 +1622,7 @@ MODELS: tuple[ModelSeed, ...] = (
         "cohere:api",
         "cohere-pricing",
         VERIFIED_LIVE,
+        price_unit="searches",
     ),
     ModelSeed(
         "cohere",
@@ -1636,6 +1642,7 @@ MODELS: tuple[ModelSeed, ...] = (
         "deprecated",
         "No longer on Cohere's pricing page. Rerank 4 Fast is the same "
         "$2.00 per 1K searches with an 8x larger context.",
+        price_unit="searches",
     ),
     ModelSeed(
         "cohere",
@@ -1655,6 +1662,7 @@ MODELS: tuple[ModelSeed, ...] = (
         "deprecated",
         "No longer on Cohere's pricing page. The Rerank 4 family is "
         "multilingual across 100+ languages.",
+        price_unit="searches",
     ),
     ModelSeed(
         "voyage",

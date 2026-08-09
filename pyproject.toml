@@ -27,6 +27,8 @@ dependencies = [
     # Windows has no system tz database; zoneinfo (and Alembic's timestamped
     # revision files) need this.
     "tzdata>=2024.2",
+    "pypdf>=6.15.0",
+    "python-multipart>=0.0.32",
 ]
 
 [dependency-groups]

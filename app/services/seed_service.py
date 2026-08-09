@@ -202,6 +202,7 @@ async def _seed_models(
             "tokenizer": seed.tokenizer,
             "status": seed.status,
             "status_reason": seed.status_reason,
+            "price_unit": seed.price_unit,
             "source_id": source.id,
             "last_verified_at": _at_midnight(seed.verified),
         }

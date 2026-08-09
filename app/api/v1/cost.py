@@ -83,9 +83,10 @@ async def run_embedding_cost(
 ) -> dict[str, Any]:
     model = await catalog_service.get_model(db, payload.model_id)
     if model.family != "embedding":
-        raise ValidationFailed(
-            f"{model.display_name} is a {model.family} model, not an embedding model.",
-            details={"fields": [{"field": "model_id", "message": "Choose an embedding model."}]},
+        raise ValidationFailed.on_field(
+            "model_id",
+            "Choose an embedding model.",
+            summary=f"{model.display_name} is a {model.family} model, not an embedding model.",
         )
     alternatives = [
         candidate

@@ -96,9 +96,9 @@ async def run_compare_vector_db(
     for slug in payload.tool_slugs:
         tool = await catalog_service.get_tool(db, slug)
         if tool.category != "vector-db":
-            raise ValidationFailed(
+            raise ValidationFailed.on_field(
+                "tool_slugs",
                 f"{tool.name} is a {tool.category}, not a vector database.",
-                details={"fields": [{"field": "tool_slugs", "message": tool.slug}]},
             )
         tools.append(tool)
 

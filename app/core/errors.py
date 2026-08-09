@@ -38,6 +38,22 @@ class ValidationFailed(AppError):
     http_status = 422
     default_message = "The request could not be validated."
 
+    @classmethod
+    def on_field(cls, path: str, message: str, *, summary: str | None = None) -> ValidationFailed:
+        """A 422 the client can attach to a specific form control.
+
+        The key is `path`, matching what FastAPI's own validation handler
+        emits and what the frontend reads. Hand-built bodies had drifted to
+        `field`, which produced `setError(undefined)` — and because the client
+        deliberately suppresses the toast for a 422 (a field error belongs on
+        the field), the user got no feedback whatsoever. Constructing it here
+        means there is one spelling of the key.
+        """
+        return cls(
+            summary or message,
+            details={"fields": [{"path": path, "message": message}]},
+        )
+
 
 class Unauthenticated(AppError):
     code = "UNAUTHENTICATED"

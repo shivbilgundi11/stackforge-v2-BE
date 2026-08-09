@@ -52,6 +52,13 @@ class LifecycleStatus(str, enum.Enum):
     RETIRED = "retired"
 
 
+class PriceUnit(str, enum.Enum):
+    """What a stored price is a price of. See `ModelPricing.price_unit`."""
+
+    TOKENS = "tokens"
+    SEARCHES = "searches"
+
+
 class ToolCategory(str, enum.Enum):
     VECTOR_DB = "vector-db"
     LLM_PROVIDER = "llm-provider"
@@ -143,6 +150,24 @@ class ModelPricing(Base, TimestampMixin):
 
     capabilities: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict)
     tokenizer: Mapped[str | None] = mapped_column(String(80))
+
+    # What `input_cost_per_1k` is a price *of* (D-18).
+    #
+    # `tokens` for everything except Cohere's rerank endpoints, which publish
+    # per 1K searches - one search being one query against up to 100
+    # documents. Both units landed in the same column, and the column could
+    # not say which, so comparing a Cohere reranker against a Voyage one was a
+    # 1000x error wearing the costume of a plausible price.
+    #
+    # `searches` means the stored value is the cost of a single search, the
+    # seed's per-1K figure having been divided by the same 1000 as everything
+    # else.
+    price_unit: Mapped[PriceUnit] = mapped_column(
+        Enum(PriceUnit, name="price_unit", values_callable=lambda e: [m.value for m in e]),
+        nullable=False,
+        default=PriceUnit.TOKENS,
+        server_default=PriceUnit.TOKENS.value,
+    )
 
     status: Mapped[LifecycleStatus] = mapped_column(
         Enum(

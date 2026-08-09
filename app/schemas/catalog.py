@@ -54,6 +54,11 @@ class ModelOut(BaseModel):
     dimensions: int | None = None
     capabilities: dict[str, Any] = Field(default_factory=dict)
     tokenizer: str | None = None
+    # "tokens" everywhere except Cohere rerank, which is "searches" (D-18).
+    # On the wire because a client comparing two rerankers has to know, and
+    # inferring it from the provider name is how this went wrong the first
+    # time.
+    price_unit: str = "tokens"
     status: str
     status_reason: str | None = None
     provenance: ProvenanceOut
