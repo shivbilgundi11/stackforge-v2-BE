@@ -285,6 +285,57 @@ async def test_recent_runs_are_listed_for_the_caller(client: AsyncClient) -> Non
     assert listed.status_code == 200
 
 
+async def test_a_reopened_run_keeps_its_provenance(client: AsyncClient) -> None:
+    """Reopening a run must not quietly strip its verification dates.
+
+    Provenance is attached by the engine, not by `compute`, so storing the
+    inner output object dropped it — the chips were on screen for the live
+    result and gone the moment the run was opened from history. Absent chips
+    read as "this number has no source", which is a stronger and falser claim
+    than anything the tool makes.
+    """
+    live = (await client.post(PRICING, json=BASE_PAYLOAD)).json()["data"]
+    assert live["provenance"]["sources"], "the live run should have sources to lose"
+
+    reopened = await client.get(f"/api/v1/runs/{live['run_id']}")
+    assert reopened.status_code == 200
+
+    output = reopened.json()["data"]["output"]
+    assert output["provenance"] == live["provenance"]
+    assert output["metrics"] == live["metrics"]
+    assert output["run_id"] == live["run_id"]
+
+
+async def test_a_run_stored_in_the_old_shape_still_reopens(
+    client: AsyncClient, db: AsyncSession
+) -> None:
+    """Rows written before the stored blob became the full envelope.
+
+    They hold a bare `ToolOutput` with no `run_id`, `source`, or provenance.
+    Those runs are real history; the endpoint rebuilds the envelope from the
+    row rather than 500ing on a missing key.
+    """
+    run_id = (await client.post(PRICING, json=BASE_PAYLOAD)).json()["data"]["run_id"]
+
+    row = await db.get(ToolRun, run_id)
+    assert row is not None
+    row.output = {
+        key: value
+        for key, value in row.output.items()
+        if key in {"metrics", "tables", "series", "artifacts", "warnings"}
+    }
+    await db.flush()
+
+    reopened = await client.get(f"/api/v1/runs/{run_id}")
+    assert reopened.status_code == 200
+
+    output = reopened.json()["data"]["output"]
+    assert output["run_id"] == run_id
+    assert output["metrics"]["monthly_cost"]
+    # Nothing was stored, so nothing is claimed.
+    assert output["provenance"]["sources"] == []
+
+
 async def test_a_run_is_not_readable_by_another_caller(
     client: AsyncClient, db: AsyncSession
 ) -> None:

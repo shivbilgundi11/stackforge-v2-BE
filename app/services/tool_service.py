@@ -182,18 +182,42 @@ async def run_tool(
 
     duration_ms = int((time.perf_counter() - started) * 1000)
     provenance = await build_provenance(db, output.sourced_from)
+    created_at = utcnow()
+    run_id = new_id("run")
+
+    wire = ToolRunOut(
+        run_id=run_id,
+        tool_slug=slug,
+        source=source.value,
+        duration_ms=duration_ms,
+        created_at=created_at,
+        metrics=output.metrics,
+        tables=output.tables,
+        series=output.series,
+        artifacts=output.artifacts,
+        warnings=output.warnings,
+        provenance=provenance,
+        ai=ai,
+    )
 
     run = ToolRun(
-        id=new_id("run"),
+        id=run_id,
         tool_slug=slug,
         workflow=workflow,
         user_id=identity.user.id if identity.user else None,
         anonymous_session_id=None if identity.user else identity.anonymous_id,
         input=payload.model_dump(mode="json"),
-        output=output.model_dump(mode="json"),
+        # The full wire shape, not the bare `ToolOutput`. Provenance is
+        # attached here rather than by `compute`, so storing the inner object
+        # would drop it — and a reopened run would render its figures with no
+        # verification dates at all. Numbers whose provenance disappears the
+        # moment you revisit them are worse than numbers that never had any:
+        # the chips are present on first view, so their absence later reads as
+        # "this data has no source" rather than "we forgot to save it".
+        output=wire.model_dump(mode="json"),
         source=source,
         duration_ms=duration_ms,
-        created_at=utcnow(),
+        created_at=created_at,
     )
     db.add(run)
     await db.flush()
@@ -210,20 +234,7 @@ async def run_tool(
         authenticated=identity.is_authenticated,
     )
 
-    return ToolRunOut(
-        run_id=run.id,
-        tool_slug=slug,
-        source=source.value,
-        duration_ms=duration_ms,
-        created_at=run.created_at,
-        metrics=output.metrics,
-        tables=output.tables,
-        series=output.series,
-        artifacts=output.artifacts,
-        warnings=output.warnings,
-        provenance=provenance,
-        ai=ai,
-    )
+    return wire
 
 
 def _degraded_warning(message: str) -> Any:
