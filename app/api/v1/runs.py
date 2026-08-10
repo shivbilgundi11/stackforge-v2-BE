@@ -17,7 +17,7 @@ from app.api.deps import CallerIdentity, Db
 from app.core.errors import NotFound
 from app.core.responses import Envelope, ok
 from app.schemas.tools import QuotaOut, ToolRunOut
-from app.services import tool_service
+from app.services import run_service, tool_service
 
 router = APIRouter(tags=["runs"])
 
@@ -51,9 +51,18 @@ async def list_runs(
     db: Db,
     identity: CallerIdentity,
     workflow: str | None = None,
+    tool_slug: str | None = None,
+    saved: bool = Query(default=False, description="Only runs the user chose to keep."),
     limit: int = Query(default=10, ge=1, le=100),
 ) -> dict[str, Any]:
-    runs = await tool_service.recent_runs(db, identity, workflow=workflow, limit=limit)
+    runs = await run_service.list_runs(
+        db,
+        identity,
+        workflow=workflow,
+        tool_slug=tool_slug,
+        saved_only=saved,
+        limit=limit,
+    )
     return ok([RunSummaryOut.model_validate(run) for run in runs])
 
 
@@ -107,3 +116,25 @@ def _envelope(run: Any) -> ToolRunOut:
         created_at=run.created_at,
         **blob,
     )
+
+
+@router.post("/{run_id}/save", response_model=Envelope[RunSummaryOut], name="save_run")
+async def save_run(db: Db, identity: CallerIdentity, run_id: str) -> dict[str, Any]:
+    """Keep this run past the 30-day purge.
+
+    Requires an account. Running and exporting are free and anonymous;
+    *keeping* is what the account is for, and asking at this moment is asking
+    someone who has already decided the result is worth something.
+    """
+    return ok(RunSummaryOut.model_validate(await run_service.save(db, run_id, identity)))
+
+
+@router.delete("/{run_id}/save", response_model=Envelope[RunSummaryOut], name="unsave_run")
+async def unsave_run(db: Db, identity: CallerIdentity, run_id: str) -> dict[str, Any]:
+    """Drop back to ephemeral. The row stays — it is still real history."""
+    return ok(RunSummaryOut.model_validate(await run_service.unsave(db, run_id, identity)))
+
+
+@router.delete("/{run_id}", status_code=204, name="delete_run")
+async def delete_run(db: Db, identity: CallerIdentity, run_id: str) -> None:
+    await run_service.delete_run(db, run_id, identity)

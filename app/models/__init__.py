@@ -33,6 +33,7 @@ from app.models.catalog import (
     ToolCategory,
     ToolStatus,
 )
+from app.models.project import Project, ProjectItem, ProjectItemType
 from app.models.stack import Stack, StackVersion
 from app.models.tool_run import RunSource, ToolRun
 from app.models.user import Plan, PlanSource, User, UserRole
@@ -59,6 +60,9 @@ __all__ = [
     "PlanSource",
     "PricedEntity",
     "PricingHistory",
+    "Project",
+    "ProjectItem",
+    "ProjectItemType",
     "RunSource",
     "Session",
     "SourceKind",

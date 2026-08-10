@@ -19,10 +19,12 @@ from app.api.v1 import compare as compare_router
 from app.api.v1 import cost as cost_router
 from app.api.v1 import health as health_router
 from app.api.v1 import infra as infra_router
+from app.api.v1 import projects as projects_router
 from app.api.v1 import rag as rag_router
 from app.api.v1 import roi as roi_router
 from app.api.v1 import runs as runs_router
 from app.api.v1 import stacks as stacks_router
+from app.api.v1 import workspace as workspace_router
 from app.core.config import settings
 from app.core.database import dispose_engine
 from app.core.errors import AppError, Conflict, InternalError, NotFound
@@ -173,6 +175,8 @@ app.include_router(roi_router.router, prefix="/api/v1/tools/roi")
 app.include_router(architect_router.router, prefix="/api/v1/architect")
 app.include_router(stacks_router.router, prefix="/api/v1/stacks")
 app.include_router(runs_router.router, prefix="/api/v1/runs")
+app.include_router(projects_router.router, prefix="/api/v1/projects")
+app.include_router(workspace_router.router, prefix="/api/v1")
 
 
 @app.get("/", include_in_schema=False)

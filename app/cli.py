@@ -68,10 +68,62 @@ def _seed() -> None:
     asyncio.run(run())
 
 
+def _purge_runs() -> None:
+    """Delete unsaved runs past the retention window.
+
+    The scheduled job behind M17's save model: everything is logged, and what
+    the user did not choose to keep expires. `--dry-run` reports the count
+    without deleting, because the first time anyone runs a destructive job
+    against production they should be able to see what it would do.
+    """
+    import asyncio
+
+    dry_run = "--dry-run" in sys.argv
+
+    async def run() -> None:
+        from datetime import timedelta
+
+        from sqlalchemy import func, select
+
+        from app.core.database import SessionLocal, utcnow
+        from app.models.tool_run import ToolRun
+        from app.services.run_service import RETENTION_DAYS, purge_expired
+
+        async with SessionLocal() as session:
+            cutoff = utcnow() - timedelta(days=RETENTION_DAYS)
+            doomed = int(
+                await session.scalar(
+                    select(func.count())
+                    .select_from(ToolRun)
+                    .where(ToolRun.saved.is_(False), ToolRun.created_at < cutoff)
+                )
+                or 0
+            )
+            kept = int(
+                await session.scalar(
+                    select(func.count()).select_from(ToolRun).where(ToolRun.saved.is_(True))
+                )
+                or 0
+            )
+
+            if dry_run:
+                print(f"would delete {doomed} unsaved run(s) older than {RETENTION_DAYS} days")
+                print(f"{kept} saved run(s) are exempt")
+                return
+
+            removed = await purge_expired(session)
+            await session.commit()
+            print(f"deleted {removed} unsaved run(s) older than {RETENTION_DAYS} days")
+            print(f"{kept} saved run(s) untouched")
+
+    asyncio.run(run())
+
+
 COMMANDS = {
     "generate-keypair": _generate_keypair,
     "openapi": _openapi,
     "seed": _seed,
+    "purge-runs": _purge_runs,
 }
 
 

@@ -39,7 +39,13 @@ from app.schemas.auth import (
     UserOut,
     VerifyEmailRequest,
 )
-from app.services import auth_service, email_templates, session_service, token_service
+from app.services import (
+    auth_service,
+    email_templates,
+    session_service,
+    token_service,
+    tool_service,
+)
 
 logger = get_logger("auth.api")
 router = APIRouter(tags=["auth"])
@@ -120,7 +126,7 @@ async def register(payload: RegisterRequest, db: Db, meta: RequestMeta) -> dict[
 
 @router.post("/login", response_model=Envelope[AuthResult], name="login", summary="Sign in")
 async def login(
-    payload: LoginRequest, response: Response, db: Db, meta: RequestMeta
+    payload: LoginRequest, request: Request, response: Response, db: Db, meta: RequestMeta
 ) -> dict[str, Any]:
     user = await auth_service.authenticate(
         db, email=payload.email, password=payload.password, meta=meta
@@ -129,8 +135,27 @@ async def login(
         db, user_id=user.id, ip=meta.ip, user_agent=meta.user_agent
     )
     _set_refresh_cookie(response, issued.refresh_token)
+    await _claim_anonymous_work(request, db, user_id=user.id)
 
     return ok(AuthResult(user=UserOut.of(user), tokens=_tokens_for(user, issued.session.id)))
+
+
+async def _claim_anonymous_work(request: Request, db: Db, *, user_id: str) -> None:
+    """Move work done before signing in onto the account (M17).
+
+    This is the moment the two identities coexist: the anonymous cookie is
+    still on the request and we now know who the user is. Someone who ran four
+    calculations and then created an account should find them waiting — losing
+    them is the moment they learn that signing up cost them something.
+
+    Registration cannot do this: it returns 202 and issues no session, because
+    the address has to be verified first. Login is the first point at which
+    there is an authenticated identity to claim onto.
+    """
+    anonymous_id = request.cookies.get(settings.anon_cookie_name)
+    if not anonymous_id:
+        return
+    await tool_service.claim_anonymous_runs(db, anonymous_id=anonymous_id, user_id=user_id)
 
 
 @router.post(
