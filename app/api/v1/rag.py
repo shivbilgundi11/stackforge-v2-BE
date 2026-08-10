@@ -30,8 +30,9 @@ from app.schemas.rag import (
     RagArchitectureIn,
     VectorDbEstimateIn,
 )
-from app.schemas.tools import ToolRunOut
+from app.schemas.tools import ToolOutput, ToolRunOut, ToolWarning
 from app.services import (
+    ai_service,
     catalog_service,
     rag_architecture_service,
     rag_service,
@@ -205,11 +206,37 @@ async def run_rag_architecture(
             catalog=catalog,
             rerank_models=rerankers,
         ),
-        # No `enrich` yet: M16 supplies the synthesis pass. Until then the
-        # rule-written summary ships as-is and the run is marked rule_based,
-        # which is the contract in D-06 rather than a gap.
+        # Synthesis over the selection the engine already made. With no key,
+        # no quota, or a failed call this returns None and the rule-written
+        # summary ships unchanged, marked `rule_based` — D-06.
+        enrich=ai_service.enrichment(
+            db,
+            purpose="rag_architecture",
+            identity=identity,
+            tool_slug="rag-architecture",
+            variables=payload.model_dump(mode="json"),
+            apply=_apply_rag_commentary,
+        ),
     )
     return ok(result)
+
+
+def _apply_rag_commentary(output: ToolOutput, data: dict[str, Any]) -> None:
+    """Merge the written commentary into the rule result.
+
+    The components, the diagram, and the constraints are untouched — only the
+    summary is replaced and the commentary appended. A synthesis pass that
+    could edit the engine's selection would be the thing D-06 exists to
+    prevent.
+    """
+    if summary := str(data.get("summary") or "").strip():
+        output.metrics["summary"] = summary
+    if why := str(data.get("why") or "").strip():
+        output.metrics["rationale"] = why
+    for item in data.get("watch_out_for") or []:
+        output.warnings.append(ToolWarning(level="info", message=str(item)))
+    if measure := data.get("measure_first"):
+        output.tables["measure_first"] = [{"step": str(item)} for item in measure]
 
 
 @router.post("/pdf-tokens", response_model=Envelope[ToolRunOut], name="run_pdf_tokens")

@@ -11,6 +11,8 @@ from fastapi.responses import JSONResponse
 from sqlalchemy.exc import IntegrityError
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
+from app.api.v1 import agents as agents_router
+from app.api.v1 import architect as architect_router
 from app.api.v1 import auth as auth_router
 from app.api.v1 import catalog as catalog_router
 from app.api.v1 import compare as compare_router
@@ -20,6 +22,7 @@ from app.api.v1 import infra as infra_router
 from app.api.v1 import rag as rag_router
 from app.api.v1 import roi as roi_router
 from app.api.v1 import runs as runs_router
+from app.api.v1 import stacks as stacks_router
 from app.core.config import settings
 from app.core.database import dispose_engine
 from app.core.errors import AppError, Conflict, InternalError, NotFound
@@ -163,9 +166,12 @@ app.include_router(auth_router.router, prefix="/api/v1/auth")
 app.include_router(catalog_router.router, prefix="/api/v1/catalog")
 app.include_router(cost_router.router, prefix="/api/v1/tools/cost")
 app.include_router(compare_router.router, prefix="/api/v1/tools/compare")
+app.include_router(agents_router.router, prefix="/api/v1/tools/agents")
 app.include_router(infra_router.router, prefix="/api/v1/tools/infra")
 app.include_router(rag_router.router, prefix="/api/v1/tools/rag")
 app.include_router(roi_router.router, prefix="/api/v1/tools/roi")
+app.include_router(architect_router.router, prefix="/api/v1/architect")
+app.include_router(stacks_router.router, prefix="/api/v1/stacks")
 app.include_router(runs_router.router, prefix="/api/v1/runs")
 
 

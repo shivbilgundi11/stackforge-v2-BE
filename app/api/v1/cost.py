@@ -21,7 +21,7 @@ from app.schemas.cost import (
     TokenCalculatorIn,
 )
 from app.schemas.tools import ToolRunOut
-from app.services import catalog_service, cost_service, tool_service
+from app.services import catalog_service, cost_service, tokenizer_service, tool_service
 from app.services.cost_service import WorkloadLine
 
 router = APIRouter(tags=["cost"])
@@ -61,6 +61,11 @@ async def run_token_calculator(
     model = await catalog_service.get_model(db, payload.model_id)
     candidates = await catalog_service.list_models(db, family="chat")
 
+    # Counted before `run_tool`, because counting a Claude model is an API
+    # call and the compute function is pure by contract. `method` rides the
+    # response so the user knows whether the number was measured.
+    counted = await tokenizer_service.count(payload.text, model=model)
+
     result = await tool_service.run_tool(
         db,
         slug="token-calculator",
@@ -72,6 +77,7 @@ async def run_token_calculator(
             model=model,
             candidates=candidates,
             output_tokens=payload.output_tokens,
+            counted=(counted.tokens, counted.method),
         ),
     )
     return ok(result)

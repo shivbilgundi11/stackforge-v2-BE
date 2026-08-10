@@ -40,7 +40,16 @@ TEST_DATABASE_URL = os.environ.get(
 
 def pytest_configure() -> None:
     """Ephemeral signing key, so the suite never depends on a developer's .env
-    and never signs anything with a real key."""
+    and never signs anything with a real key.
+
+    The AI key is cleared for the same reason, and a stronger one: a developer
+    with `ANTHROPIC_API_KEY` in their `.env` would otherwise have `pytest`
+    make live, billable, non-deterministic model calls — and would be running
+    a different suite from CI. Tests that exercise the AI layer set a fake key
+    themselves, which is also what keeps "the whole suite passes with the key
+    unset" true by construction rather than by hoping.
+    """
+    settings.anthropic_api_key = ""
     if not settings.auth_private_key:
         private_pem, public_pem = token_service.generate_keypair()
         settings.auth_private_key = private_pem

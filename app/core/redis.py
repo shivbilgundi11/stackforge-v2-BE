@@ -9,6 +9,8 @@ from __future__ import annotations
 from typing import Final
 
 from redis.asyncio import Redis, from_url
+from redis.backoff import NoBackoff
+from redis.retry import Retry
 
 from app.core.config import settings
 
@@ -39,14 +41,28 @@ _client: Redis | None = None
 
 
 def get_redis() -> Redis:
+    """The shared client, configured to fail *fast* when Redis is down.
+
+    Every caller of this module fails open: a cache miss or a quota read that
+    errors is treated as "allow and carry on". That is the right trade, but it
+    is only a good one if the failure is cheap. With redis-py's default retry
+    policy a single unreachable call costs the connect timeout three times
+    over, and an endpoint that touches the cache in three places pays it three
+    times in series — which turned a 200ms recommendation into a 17-second one
+    on a machine whose Redis was simply not running.
+
+    So: one attempt, no backoff, a one-second ceiling. A degraded cache should
+    cost milliseconds, not seconds.
+    """
     global _client
     if _client is None:
         _client = from_url(
             settings.redis_url,
             encoding="utf-8",
             decode_responses=True,
-            socket_connect_timeout=2,
-            socket_timeout=2,
+            socket_connect_timeout=1,
+            socket_timeout=1,
+            retry=Retry(NoBackoff(), 0),
             health_check_interval=30,
         )
     return _client

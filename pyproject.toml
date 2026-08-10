@@ -30,6 +30,17 @@ dependencies = [
     "pypdf>=6.15.0",
     "python-multipart>=0.0.32",
     "pyyaml>=6.0.3",
+    # WF3 validates every generated function schema against the real thing.
+    # "looks like JSON Schema" is the check that lets an invalid tool
+    # definition reach the provider, where it fails opaquely days later.
+    "jsonschema>=4.23",
+    # M16. The SDK is a hard dependency even though the key is optional — the
+    # module must import and degrade, not fail to import.
+    "anthropic>=0.69",
+    # Real token counts. `tiktoken` for OpenAI encodings, `tokenizers` for the
+    # open-weight models, both replacing ceil(chars / 4).
+    "tiktoken>=0.8",
+    "tokenizers>=0.21",
 ]
 
 [dependency-groups]
@@ -44,6 +55,11 @@ dev = [
     "asgi-lifespan>=2.1",
     "types-pyyaml>=6.0.12.20260724",
     "kubernetes>=36.0.3",
+    # The generated MCP server is started in a subprocess and handshaked
+    # against. A generator whose output does not run is a demo, and the only
+    # way to know it runs is to run it.
+    "mcp>=1.9",
+    "types-jsonschema>=4.23",
 ]
 
 [tool.uv]

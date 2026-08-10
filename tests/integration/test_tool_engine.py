@@ -382,17 +382,39 @@ async def test_an_unknown_model_is_404_not_500(client: AsyncClient) -> None:
 # ── The other three cost tools, end to end ───────────────────────────────────
 
 
-async def test_token_calculator_end_to_end(client: AsyncClient) -> None:
+async def test_token_calculator_counts_an_openai_model_with_its_real_tokenizer(
+    client: AsyncClient,
+) -> None:
+    """M16 replaced `ceil(chars / 4)` here. An OpenAI model now goes through
+    tiktoken, and `method` on the response is what says so — the figure and
+    the label have to move together, or the tool is lying about its own
+    accuracy."""
+    import tiktoken
+
+    text = "hello world " * 500
     response = await client.post(
         "/api/v1/tools/cost/token-calculator",
-        json={"text": "hello world " * 500, "model_id": "gpt-4o-mini"},
+        json={"text": text, "model_id": "gpt-4o-mini"},
+    )
+    metrics = response.json()["data"]["metrics"]
+
+    assert metrics["method"] == "tokenizer"
+    assert int(metrics["tokens"]) == len(tiktoken.get_encoding("o200k_base").encode(text))
+    assert metrics["fits"] == "yes"
+    assert response.json()["data"]["tables"]["context_fit"]
+
+
+async def test_token_calculator_says_when_it_is_estimating(client: AsyncClient) -> None:
+    """A model with no reachable tokenizer still returns a number — labelled."""
+    response = await client.post(
+        "/api/v1/tools/cost/token-calculator",
+        json={"text": "hello world " * 500, "model_id": "gemini-3-flash"},
     )
     metrics = response.json()["data"]["metrics"]
 
     assert metrics["method"] == "heuristic"
     assert int(metrics["tokens"]) > 0
-    assert metrics["fits"] == "yes"
-    assert response.json()["data"]["tables"]["context_fit"]
+    assert any("heuristic" in w["message"] for w in response.json()["data"]["warnings"])
 
 
 async def test_embedding_cost_end_to_end(client: AsyncClient) -> None:

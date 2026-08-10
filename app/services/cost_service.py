@@ -241,15 +241,12 @@ TOKENS_PER_WORD: Final = Decimal("1.3")
 
 
 def estimate_tokens(text: str) -> tuple[int, str]:
-    """Token count and the method used to get it.
+    """The fallback count, for callers with no model to count against.
 
-    `method` is on the response, not in a log. The person reaching for a token
-    calculator is precisely the person who needs to know whether they are
-    looking at a real count or an approximation — reporting a heuristic as if
-    it were exact is worse than not offering the tool.
-
-    When M16's `TokenizerService` lands this delegates to it and returns
-    `tokenizer`; until then it is honest about being an estimate.
+    `tokenizer_service` owns real counting now and this is what it degrades to.
+    Kept here because `method` is on the response either way: the person
+    reaching for a token calculator is precisely the person who needs to know
+    whether they are looking at a real count or an approximation.
     """
     if not text:
         return 0, "heuristic"
@@ -265,8 +262,15 @@ def token_calculator(
     model: ModelOut,
     candidates: list[ModelOut] | None = None,
     output_tokens: int = 0,
+    counted: tuple[int, str] | None = None,
 ) -> ToolOutput:
-    tokens, method = estimate_tokens(text)
+    """`counted` is `(tokens, method)` from `tokenizer_service`.
+
+    Passed in rather than computed, because counting a Claude model means an
+    API call and this function is deliberately pure — that purity is what
+    makes every figure in it assertable by hand.
+    """
+    tokens, method = counted if counted is not None else estimate_tokens(text)
     total_needed = tokens + output_tokens
 
     window = model.context_window or 0

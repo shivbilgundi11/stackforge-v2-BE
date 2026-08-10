@@ -5,6 +5,7 @@ is invisible to it — the failure mode is a migration that silently drops a
 table nobody noticed was missing.
 """
 
+from app.models.ai import AiCall, AiOutcome
 from app.models.auth import (
     AnonymousSession,
     AuthEvent,
@@ -32,10 +33,13 @@ from app.models.catalog import (
     ToolCategory,
     ToolStatus,
 )
+from app.models.stack import Stack, StackVersion
 from app.models.tool_run import RunSource, ToolRun
 from app.models.user import Plan, PlanSource, User, UserRole
 
 __all__ = [
+    "AiCall",
+    "AiOutcome",
     "AnonymousSession",
     "AuthEvent",
     "AuthEventType",
@@ -58,6 +62,8 @@ __all__ = [
     "RunSource",
     "Session",
     "SourceKind",
+    "Stack",
+    "StackVersion",
     "TokenPurpose",
     "Tool",
     "ToolCategory",
