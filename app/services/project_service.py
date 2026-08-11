@@ -17,27 +17,19 @@ from sqlalchemy import delete, func, select
 from sqlalchemy.engine import CursorResult
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.api.deps import Identity
 from app.core.database import utcnow
-from app.core.errors import NotFound, QuotaExceeded, ValidationFailed
+from app.core.errors import NotFound, ValidationFailed
 from app.core.logging import get_logger
+from app.models.billing import Metric
 from app.models.export import Export
 from app.models.project import Project, ProjectItem, ProjectItemType
 from app.models.stack import Stack
 from app.models.tool_run import ToolRun
-from app.models.user import Plan, User
+from app.models.user import User
 from app.repositories import scoped
 
 logger = get_logger("projects")
-
-#: Projects allowed per plan. Free gets none — projects are the thing an
-#: account is *for*, so giving them away removes the reason to upgrade while
-#: adding the storage cost of keeping them.
-PROJECT_LIMIT: Final[dict[str, int]] = {
-    Plan.FREE.value: 0,
-    Plan.PRO.value: 20,
-    Plan.TEAM.value: 200,
-    Plan.ENTERPRISE.value: 10_000,
-}
 
 #: How an item type resolves to a row, so a project can render its contents
 #: without the caller knowing the shape of each one.
@@ -53,8 +45,25 @@ ITEM_MODELS: Final = {
 }
 
 
-def limit_for(user: User) -> int:
-    return PROJECT_LIMIT.get(user.plan.value, PROJECT_LIMIT[Plan.FREE.value])
+def _identity(user: User) -> Identity:
+    """`FeatureService` speaks in identities, and this module in users.
+
+    Projects require an account, so a user is always convertible to an identity
+    — the reverse is not true, which is why the quota layer takes the wider
+    type.
+    """
+    return Identity(user=user, anonymous_id=None, session_id=None)
+
+
+async def limit_for(db: AsyncSession, user: User) -> int | None:
+    """The plan's project allowance. `None` is unlimited.
+
+    Read from `plan_quotas` (M20). It used to be a dict in this module, which
+    meant "Free gets no projects" — a pricing decision — was a code change.
+    """
+    from app.services import feature_service
+
+    return await feature_service.limit_for(db, _identity(user), Metric.PROJECTS)
 
 
 async def count_for(db: AsyncSession, user: User) -> int:
@@ -76,26 +85,11 @@ async def create(
     description: str | None = None,
     use_case: str | None = None,
 ) -> Project:
-    limit = limit_for(user)
-    used = await count_for(db, user)
-    if used >= limit:
-        raise QuotaExceeded(
-            (
-                "Projects are not included on the free plan."
-                if limit == 0
-                else f"You have used all {limit} projects on your plan."
-            ),
-            details={
-                "quota": {
-                    "metric": "projects",
-                    "limit": limit,
-                    "used": used,
-                    "remaining": 0,
-                    "period": "plan",
-                    "plan": user.plan.value,
-                }
-            },
-        )
+    from app.services import feature_service
+
+    # Raises `QuotaExceeded` with the real figures. A level metric, so this
+    # only asks whether there is room — the insert below is the increment.
+    await feature_service.consume(db, _identity(user), Metric.PROJECTS)
 
     project = Project(user_id=user.id, name=name, description=description, use_case=use_case)
     db.add(project)

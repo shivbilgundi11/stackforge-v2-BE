@@ -71,8 +71,27 @@ async def engine() -> AsyncIterator[object]:
         await conn.execute(text("CREATE EXTENSION IF NOT EXISTS citext"))
         await conn.run_sync(Base.metadata.drop_all)
         await conn.run_sync(Base.metadata.create_all)
+
+    await _seed_plan_quotas(test_engine)
     yield test_engine
     await test_engine.dispose()
+
+
+async def _seed_plan_quotas(test_engine: object) -> None:
+    """Every plan limit, committed once for the session.
+
+    Not part of `seeded_catalog`, and deliberately so: `plan_quotas` is not
+    reference data a test opts into, it is infrastructure. `FeatureService`
+    fails *closed* on a missing row (an unseeded database should not silently
+    disable every quota), so without these rows every request in the suite
+    would 402 — including the ones that have nothing to do with billing.
+    """
+    from app.services.seed_service import SeedReport, seed_plan_quotas
+
+    maker = async_sessionmaker(bind=test_engine, expire_on_commit=False)  # type: ignore[arg-type]
+    async with maker() as session:
+        await seed_plan_quotas(session, SeedReport(), refresh=False)
+        await session.commit()
 
 
 @pytest_asyncio.fixture(scope="session", loop_scope="session")
@@ -134,6 +153,21 @@ def fake_redis() -> AsyncIterator[None]:
 
 
 @pytest.fixture(autouse=True)
+def clear_limit_cache() -> AsyncIterator[None]:
+    """`FeatureService` caches `plan_quotas` in-process for a minute.
+
+    Cleared around every test, because a test that edits a limit does so inside
+    a transaction that is rolled back — leaving the cache holding a value no
+    longer in the database, and the *next* test enforcing it.
+    """
+    from app.services import feature_service
+
+    feature_service.invalidate_limits()
+    yield
+    feature_service.invalidate_limits()
+
+
+@pytest.fixture(autouse=True)
 def outbox() -> AsyncIterator[email_integration.ConsoleSender]:
     """Captures every email so a test can read a verification link out of it
     without a mail server."""
@@ -179,6 +213,41 @@ def register_payload() -> dict[str, str]:
         "password": GOOD_PASSWORD,
         "name": "Ada Lovelace",
     }
+
+
+async def set_limit(
+    db: AsyncSession,
+    *,
+    plan: object,
+    metric: object,
+    value: int | None,
+    anonymous: bool = False,
+) -> None:
+    """Change one quota, the way an operator would (M20).
+
+    Tests used to monkeypatch a module-level dict. The limits are a table now,
+    so a test that wants a smaller cap writes the smaller cap — which is also
+    the assertion that changing a limit takes no deploy. The in-process cache
+    is invalidated here because the write is inside a rolled-back transaction
+    and nothing else would clear it.
+    """
+    from sqlalchemy import select
+
+    from app.models.billing import PlanQuota
+    from app.services import feature_service
+
+    row = (
+        await db.execute(
+            select(PlanQuota).where(
+                PlanQuota.plan == plan,
+                PlanQuota.metric == metric,
+                PlanQuota.anonymous.is_(anonymous),
+            )
+        )
+    ).scalar_one()
+    row.limit_value = value
+    await db.flush()
+    feature_service.invalidate_limits()
 
 
 async def register_and_verify(

@@ -14,6 +14,7 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 from app.api.v1 import agents as agents_router
 from app.api.v1 import architect as architect_router
 from app.api.v1 import auth as auth_router
+from app.api.v1 import billing as billing_router
 from app.api.v1 import catalog as catalog_router
 from app.api.v1 import compare as compare_router
 from app.api.v1 import cost as cost_router
@@ -50,6 +51,7 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
         "app.start",
         environment=settings.environment,
         ai_enabled=settings.ai_enabled,
+        billing_enabled=settings.billing_enabled,
         google_oauth=settings.google_oauth_enabled,
         github_oauth=settings.github_oauth_enabled,
     )
@@ -181,6 +183,7 @@ app.include_router(runs_router.router, prefix="/api/v1/runs")
 app.include_router(projects_router.router, prefix="/api/v1/projects")
 app.include_router(exports_router.router, prefix="/api/v1/exports")
 app.include_router(templates_router.router, prefix="/api/v1/templates")
+app.include_router(billing_router.router, prefix="/api/v1/billing")
 # Mounted at the version root rather than under a prefix: this router owns both
 # `/shares` (owner, authenticated) and `/s/{token}` (public, unauthenticated),
 # and the public path is deliberately short — it is pasted into chat messages.

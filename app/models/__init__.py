@@ -17,6 +17,14 @@ from app.models.auth import (
     Session,
     TokenPurpose,
 )
+from app.models.billing import (
+    Metric,
+    PlanQuota,
+    StripeEvent,
+    Subscription,
+    SubscriptionStatus,
+    UsageRecord,
+)
 from app.models.catalog import (
     CatalogFlag,
     Compatibility,
@@ -64,11 +72,13 @@ __all__ = [
     "FlagStatus",
     "GpuPricing",
     "LifecycleStatus",
+    "Metric",
     "ModelFamily",
     "ModelPricing",
     "OAuthAccount",
     "OAuthProvider",
     "Plan",
+    "PlanQuota",
     "PlanSource",
     "PricedEntity",
     "PricingHistory",
@@ -82,6 +92,9 @@ __all__ = [
     "SourceType",
     "Stack",
     "StackVersion",
+    "StripeEvent",
+    "Subscription",
+    "SubscriptionStatus",
     "Template",
     "TemplateCategory",
     "TokenPurpose",
@@ -89,6 +102,7 @@ __all__ = [
     "ToolCategory",
     "ToolRun",
     "ToolStatus",
+    "UsageRecord",
     "User",
     "UserRole",
 ]

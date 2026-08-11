@@ -59,8 +59,22 @@ def test_a_free_user_asking_for_pdf_gets_the_upgrade_details() -> None:
     assert raised.value.details == {
         "required_plan": "pro",
         "current_plan": "free",
+        # M20: the dialog branches on this to offer signup rather than a
+        # billing page. False here — this caller has an account, just not the
+        # plan.
+        "requires_account": False,
         "format": "pdf",
     }
+
+
+def test_an_anonymous_caller_asking_for_pdf_is_told_to_sign_up_first() -> None:
+    """Two different walls, two different buttons. Sending someone without an
+    account to a billing page is sending them to a page they cannot use."""
+    with pytest.raises(PlanRequired) as raised:
+        export_service.assert_allowed(ExportFormat.PDF, identity(anonymous=True))
+
+    assert raised.value.details is not None
+    assert raised.value.details["requires_account"] is True
 
 
 def test_a_team_plan_clears_a_pro_gate() -> None:

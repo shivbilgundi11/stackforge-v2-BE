@@ -23,6 +23,8 @@ from app.core.errors import (
     TokenInvalid,
     Unauthenticated,
 )
+from app.data.plans import Feature
+from app.models.billing import Metric
 from app.models.user import Plan, User, UserRole
 from app.services import auth_service, session_service, token_service
 
@@ -218,6 +220,50 @@ def require_plan(minimum: Plan) -> object:
                 details={"required_plan": minimum.value, "current_plan": user.plan.value},
             )
         return user
+
+    return Depends(dependency)
+
+
+def require_feature(feature: Feature) -> object:
+    """Feature gate (M20).
+
+    Prefer this over `require_plan`: it names the capability rather than the
+    tier, so moving PDF export from Pro to Team is one edit in `data/plans.py`
+    instead of a search for `require_plan(Plan.PRO)` across the routers.
+
+    Unlike `require_plan` this accepts an anonymous caller, because some
+    features are open to one — the verdict, including "you need an account
+    rather than a bigger plan", comes from `FeatureService`.
+    """
+
+    async def dependency(identity: CallerIdentity) -> Identity:
+        from app.services import feature_service
+
+        feature_service.require(identity, feature)
+        return identity
+
+    return Depends(dependency)
+
+
+def consume_quota(metric: Metric, amount: int = 1) -> object:
+    """Meter gate (M20).
+
+    Declared as a dependency rather than called inside the handler for the
+    reason at the top of this file: a gate in a route body is a gate the next
+    endpoint forgets. It consumes *before* the handler runs, which is the
+    conservative order — a handler that then fails has cost the user one unit
+    of allowance, and the alternative is a handler that succeeds without ever
+    being counted.
+
+    The tool engine is the exception and consumes explicitly, because it has a
+    persist step that must be inside the same transaction as the count.
+    """
+
+    async def dependency(identity: CallerIdentity, db: Db) -> Identity:
+        from app.services import feature_service
+
+        await feature_service.consume(db, identity, metric, amount)
+        return identity
 
     return Depends(dependency)
 

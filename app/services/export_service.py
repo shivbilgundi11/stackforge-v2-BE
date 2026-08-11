@@ -43,6 +43,7 @@ from app.core.config import settings
 from app.core.database import new_id, utcnow
 from app.core.errors import NotFound, PlanRequired, ValidationFailed
 from app.core.logging import get_logger
+from app.data import plans as plan_data
 from app.models.export import Export, ExportFormat, ExportStatus, SourceType
 from app.models.user import Plan
 from app.schemas.tools import Artifact
@@ -52,25 +53,6 @@ from app.services.artifacts import result_document
 from app.services.artifacts.sources import RunSource, Source, StackSource
 
 logger = get_logger("exports")
-
-#: Which plan each format needs. `PRD.md` §18. A dict rather than an `if`,
-#: because "what does Pro get" is a pricing question and pricing questions
-#: that live in branches get out of step with the pricing page.
-FORMAT_PLANS: Final[dict[ExportFormat, Plan]] = {
-    ExportFormat.MARKDOWN: Plan.FREE,
-    ExportFormat.JSON: Plan.PRO,
-    ExportFormat.YAML: Plan.PRO,
-    ExportFormat.CSV: Plan.PRO,
-    ExportFormat.PDF: Plan.PRO,
-    ExportFormat.ZIP: Plan.PRO,
-}
-
-PLAN_RANK: Final[dict[Plan, int]] = {
-    Plan.FREE: 0,
-    Plan.PRO: 1,
-    Plan.TEAM: 2,
-    Plan.ENTERPRISE: 3,
-}
 
 CONTENT_TYPES: Final[dict[ExportFormat, str]] = {
     ExportFormat.MARKDOWN: "text/markdown; charset=utf-8",
@@ -106,14 +88,22 @@ class Rendered:
 
 
 # ── plan gating ──────────────────────────────────────────────────────────────
+#
+# The format→plan map used to live here. It now lives in `data/plans.py` as a
+# format→*feature* map, and the verdict comes from `FeatureService` (M20) —
+# these three functions are the same questions asked of the one authority
+# rather than of a local dict.
 
 
 def required_plan(export_format: ExportFormat) -> Plan:
-    return FORMAT_PLANS.get(export_format, Plan.PRO)
+    return plan_data.feature_spec(plan_data.FORMAT_FEATURES[export_format]).minimum_plan
 
 
 def allowed(export_format: ExportFormat, identity: Identity) -> bool:
-    return PLAN_RANK[identity.plan] >= PLAN_RANK[required_plan(export_format)]
+    from app.services import feature_service
+
+    verdict = feature_service.can(identity, plan_data.FORMAT_FEATURES[export_format])
+    return verdict.allowed
 
 
 def assert_allowed(export_format: ExportFormat, identity: Identity) -> None:
@@ -121,16 +111,23 @@ def assert_allowed(export_format: ExportFormat, identity: Identity) -> None:
 
     `required_plan` and `current_plan` are in the details because a paywall
     with no figures is a dead end — the dialog has to be able to say what the
-    user would be buying.
+    user would be buying. `format` is added on top of the standard verdict
+    details so the tray can highlight the row that was clicked.
     """
-    if allowed(export_format, identity):
+    from app.services import feature_service
+
+    feature = plan_data.FORMAT_FEATURES[export_format]
+    verdict = feature_service.can(identity, feature)
+    if verdict.allowed:
         return
+
     minimum = required_plan(export_format)
     raise PlanRequired(
         f"{export_format.value.upper()} export requires the {minimum.value.title()} plan.",
         details={
             "required_plan": minimum.value,
             "current_plan": identity.plan.value,
+            "requires_account": not identity.is_authenticated,
             "format": export_format.value,
         },
     )

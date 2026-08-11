@@ -132,6 +132,7 @@ async def seed_all(db: AsyncSession, *, refresh: bool = False) -> SeedReport:
     await db.flush()
     await _seed_compatibility(db, report, refresh=refresh)
     await _seed_templates(db, report, refresh=refresh)
+    await seed_plan_quotas(db, report, refresh=refresh)
     await _find_unmanaged(db, report)
 
     logger.info(
@@ -451,6 +452,53 @@ async def _seed_templates(db: AsyncSession, report: SeedReport, *, refresh: bool
     # later reverted would otherwise take its view and copy counts with it, and
     # `_find_unmanaged` already reports the row so the removal is visible.
     _ = refresh
+
+
+async def seed_plan_quotas(db: AsyncSession, report: SeedReport, *, refresh: bool) -> None:
+    """Load the default limits into `plan_quotas` (M20).
+
+    Insert-only, and this one is not a default that `--refresh` should casually
+    override — it is the point of the table. M20's rule is that every limit is
+    changeable without a deploy, so an operator who raises the free tier to 10
+    runs must not have that reverted by the next release's seed run. `--refresh`
+    still overwrites, because the case where the seed file *is* the correction
+    exists here as it does for prices, but it is a deliberate act.
+
+    A metric added to the enum after this table was first seeded arrives as a
+    new row on the next run, which is why this iterates the metric map rather
+    than skipping a plan once it has any rows at all.
+    """
+    from app.data.plans import DEFAULT_QUOTAS
+    from app.models.billing import PlanQuota
+
+    existing = {
+        (row.plan, row.anonymous, row.metric): row
+        for row in (await db.execute(select(PlanQuota))).scalars().all()
+    }
+
+    inserted = updated = skipped = 0
+    for (plan, anonymous), limits in DEFAULT_QUOTAS.items():
+        for metric, limit in limits.items():
+            current = existing.get((plan, anonymous, metric))
+            if current is None:
+                db.add(
+                    PlanQuota(
+                        id=new_id("pq"),
+                        plan=plan,
+                        anonymous=anonymous,
+                        metric=metric,
+                        limit_value=limit,
+                    )
+                )
+                inserted += 1
+            elif refresh and current.limit_value != limit:
+                current.limit_value = limit
+                updated += 1
+            else:
+                skipped += 1
+
+    await db.flush()
+    report.note("plan_quotas", inserted, updated, skipped)
 
 
 async def _find_unmanaged(db: AsyncSession, report: SeedReport) -> None:

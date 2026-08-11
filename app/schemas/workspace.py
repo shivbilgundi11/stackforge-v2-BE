@@ -138,7 +138,9 @@ class UsageOut(BaseModel):
     saved: int
     today: int
     projects: int
-    project_limit: int
+    #: `null` is unlimited (M20). Not a large sentinel — a meter reading
+    #: "3 of 999999" is a meter nobody believes.
+    project_limit: int | None
 
 
 class PlanOut(BaseModel):

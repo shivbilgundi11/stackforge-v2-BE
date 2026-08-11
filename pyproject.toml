@@ -56,6 +56,12 @@ dependencies = [
     # D-05, finally used: bundle generation and the export purge are the first
     # work in this program that does not belong inside a request.
     "arq>=0.26",
+    # M20. Same rule as the AI SDK: a hard dependency with an optional key. The
+    # billing module has to import and degrade to "checkout unavailable" when
+    # STRIPE_SECRET_KEY is unset, because local development and CI both run
+    # without one — and the webhook signature verifier is needed even in the
+    # tests that never talk to Stripe.
+    "stripe>=11.4",
 ]
 
 [dependency-groups]

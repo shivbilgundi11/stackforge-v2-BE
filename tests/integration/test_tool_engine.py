@@ -17,7 +17,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.deps import Identity
 from app.core.redis import get_redis
 from app.models.tool_run import ToolRun
-from app.services import tool_service
+from app.services import feature_service, tool_service
+from app.services.tool_service import RUN_METRIC
 
 pytestmark = pytest.mark.usefixtures("seeded_catalog")
 
@@ -161,11 +162,26 @@ async def test_anonymous_runs_are_claimed_on_signup(db: AsyncSession) -> None:
 # ── Quota ────────────────────────────────────────────────────────────────────
 
 
+async def _anonymous_run_limit(db: AsyncSession) -> int:
+    """The anonymous allowance, read from `plan_quotas` rather than a constant.
+
+    The limit moved into the table in M20 precisely so it could be changed
+    without a deploy; a test that hardcoded 5 would have to be edited every
+    time the number is tuned, which is the coupling the table removed.
+    """
+    limit = await feature_service.limit_for(
+        db, Identity(user=None, anonymous_id="anon_probe", session_id=None), RUN_METRIC
+    )
+    assert limit is not None, "the anonymous tier must be capped"
+    return limit
+
+
 async def test_quota_returns_402_at_the_limit_with_real_numbers(
     client: AsyncClient,
+    db: AsyncSession,
 ) -> None:
     """ "You hit your limit" with no figures is a dead end."""
-    limit = tool_service.DAILY_RUN_LIMIT["anonymous"]
+    limit = await _anonymous_run_limit(db)
 
     for _ in range(limit):
         assert (await client.post(PRICING, json=BASE_PAYLOAD)).status_code == 200
@@ -182,15 +198,15 @@ async def test_quota_returns_402_at_the_limit_with_real_numbers(
     assert quota["resets_at"]
 
 
-async def test_below_the_limit_returns_200(client: AsyncClient) -> None:
-    for _ in range(tool_service.DAILY_RUN_LIMIT["anonymous"] - 1):
+async def test_below_the_limit_returns_200(client: AsyncClient, db: AsyncSession) -> None:
+    for _ in range(await _anonymous_run_limit(db) - 1):
         assert (await client.post(PRICING, json=BASE_PAYLOAD)).status_code == 200
 
 
 async def test_a_blocked_run_is_not_logged(client: AsyncClient, db: AsyncSession) -> None:
     """The quota check happens before compute, so a rejected call costs nothing
     and leaves no row to skew the metrics."""
-    for _ in range(tool_service.DAILY_RUN_LIMIT["anonymous"]):
+    for _ in range(await _anonymous_run_limit(db)):
         await client.post(PRICING, json=BASE_PAYLOAD)
 
     before = len((await db.execute(select(ToolRun))).scalars().all())
@@ -209,7 +225,7 @@ async def test_quota_is_readable_before_running_anything(client: AsyncClient) ->
     assert quota["plan"] == "anonymous"
 
 
-async def test_quota_fails_open_when_redis_is_unavailable() -> None:
+async def test_quota_fails_open_when_redis_is_unavailable(db: AsyncSession) -> None:
     """A cache outage must not look like a billing failure to every user."""
     from app.core.redis import set_redis
 
@@ -217,13 +233,18 @@ async def test_quota_fails_open_when_redis_is_unavailable() -> None:
         async def get(self, *_: object, **__: object) -> None:
             raise OSError("redis is down")
 
-        async def incr(self, *_: object, **__: object) -> None:
+        async def incrby(self, *_: object, **__: object) -> None:
             raise OSError("redis is down")
 
     set_redis(_Broken())  # type: ignore[arg-type]
     try:
         state = await tool_service.check_quota(
-            Identity(user=None, anonymous_id="anon_x", session_id=None)
+            db, Identity(user=None, anonymous_id="anon_x", session_id=None)
+        )
+        # And the enforcing path allows rather than refusing: an unreadable
+        # counter reads as zero used, which is the whole point of failing open.
+        await tool_service.consume_quota(
+            db, Identity(user=None, anonymous_id="anon_x", session_id=None)
         )
     finally:
         set_redis(None)
@@ -631,12 +652,32 @@ async def test_repeated_runs_reuse_the_catalog_cache(client: AsyncClient) -> Non
     assert keys, "the first run should have populated the model cache"
 
 
-def test_quota_limits_are_ordered_by_plan() -> None:
-    """A plan that costs more must not allow less."""
-    limits = tool_service.DAILY_RUN_LIMIT
-    assert (
-        limits["anonymous"] < limits["free"] < limits["pro"] < limits["team"] < limits["enterprise"]
-    )
+async def test_quota_limits_are_ordered_by_plan(db: AsyncSession) -> None:
+    """A plan that costs more must not allow less.
+
+    Asserted against the seeded rows rather than the constants: the table is
+    what is enforced, and an operator raising the free tier past Pro's with an
+    `UPDATE` is exactly the mistake this catches.
+    """
+    from app.models.billing import Metric, PlanQuota
+    from app.models.user import Plan
+
+    rows = (
+        await db.execute(select(PlanQuota).where(PlanQuota.metric == Metric.TOOL_RUNS_PER_DAY))
+    ).scalars()
+    # `None` is unlimited, so it sorts above every real number.
+    limits = {(row.plan, row.anonymous): row.limit_value for row in rows}
+    ordered = [
+        limits[(Plan.FREE, True)],
+        limits[(Plan.FREE, False)],
+        limits[(Plan.PRO, False)],
+        limits[(Plan.TEAM, False)],
+        limits[(Plan.ENTERPRISE, False)],
+    ]
+
+    ranked = [float("inf") if value is None else value for value in ordered]
+    assert ranked == sorted(ranked), f"a cheaper plan allows more: {ordered}"
+    assert ranked[0] < ranked[1], "signing up must buy more than staying anonymous"
 
 
 def test_metric_decimals_serialise_as_strings() -> None:

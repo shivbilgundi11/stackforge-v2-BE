@@ -119,11 +119,118 @@ def _purge_runs() -> None:
     asyncio.run(run())
 
 
+def _stripe_sync() -> None:
+    """Create the products and prices this build sells.
+
+    In a script rather than the dashboard, so environments are reproducible and
+    a price id is never a thing someone remembers copying. Idempotent: products
+    are looked up by a `stackforge_plan` metadata key and prices by amount and
+    interval, so running it twice creates nothing and prints the same ids.
+
+    It never *edits* a price. Stripe prices are immutable by design — changing
+    what something costs means creating a new price and pointing config at it,
+    which is exactly the behaviour you want when a subscriber is already on the
+    old one.
+
+    Prints the `.env` lines to paste. Deliberately not written to a file: these
+    are environment configuration and a script that edits `.env` behind
+    someone's back is a script that eventually edits the wrong one.
+    """
+    import asyncio
+
+    import stripe
+
+    from app.core.config import settings
+    from app.data import plans as plan_data
+
+    if not settings.stripe_secret_key:
+        print("STRIPE_SECRET_KEY is not set. Nothing to sync.", file=sys.stderr)
+        raise SystemExit(2)
+
+    live = not settings.stripe_secret_key.startswith("sk_test_")
+    if live and "--live" not in sys.argv:
+        print(
+            "That is a live key. Re-run with --live if you mean it.",
+            file=sys.stderr,
+        )
+        raise SystemExit(2)
+
+    async def run() -> None:
+        client = stripe.StripeClient(settings.stripe_secret_key)
+        lines: list[str] = []
+
+        for spec in plan_data.PLANS:
+            if not spec.checkout or spec.monthly_cents is None:
+                continue
+
+            products = await client.v1.products.search_async(
+                params={"query": f"metadata['stackforge_plan']:'{spec.plan.value}'"}
+            )
+            if products.data:
+                product = products.data[0]
+                print(f"{spec.label:12} product exists  {product.id}")
+            else:
+                product = await client.v1.products.create_async(
+                    params={
+                        "name": f"StackForge {spec.label}",
+                        "description": spec.tagline,
+                        "metadata": {"stackforge_plan": spec.plan.value},
+                    }
+                )
+                print(f"{spec.label:12} product created {product.id}")
+
+            for interval, amount in (
+                ("month", spec.monthly_cents),
+                ("year", spec.annual_cents),
+            ):
+                if amount is None:
+                    continue
+
+                existing = await client.v1.prices.list_async(
+                    params={"product": product.id, "active": True, "limit": 100}
+                )
+                match = next(
+                    (
+                        price
+                        for price in existing.data
+                        if price.unit_amount == amount
+                        and price.recurring
+                        and price.recurring.interval == interval
+                    ),
+                    None,
+                )
+                if match is not None:
+                    price_id = str(match.id)
+                    print(f"{spec.label:12} {interval:5} price exists  {price_id}")
+                else:
+                    created = await client.v1.prices.create_async(
+                        params={
+                            "product": product.id,
+                            "currency": plan_data.CURRENCY,
+                            "unit_amount": amount,
+                            "recurring": {"interval": interval},  # type: ignore[typeddict-item]
+                            "metadata": {"stackforge_plan": spec.plan.value},
+                        }
+                    )
+                    price_id = str(created.id)
+                    print(f"{spec.label:12} {interval:5} price created {price_id}")
+
+                suffix = "MONTHLY" if interval == "month" else "ANNUAL"
+                lines.append(f"STRIPE_PRICE_{spec.plan.value.upper()}_{suffix}={price_id}")
+
+        print("\nPaste into .env:\n")
+        for line in lines:
+            print(line)
+
+    asyncio.run(run())
+
+
 COMMANDS = {
     "generate-keypair": _generate_keypair,
     "openapi": _openapi,
     "seed": _seed,
     "purge-runs": _purge_runs,
+    "stripe-sync": _stripe_sync,
 }
 
 

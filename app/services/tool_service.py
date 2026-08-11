@@ -18,129 +18,46 @@ from __future__ import annotations
 
 import time
 from collections.abc import Awaitable, Callable
-from dataclasses import dataclass
-from datetime import UTC, datetime, timedelta
 from typing import Any, Final
 
 from pydantic import BaseModel
-from redis.exceptions import RedisError
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import Identity
 from app.core.database import new_id, utcnow
-from app.core.errors import QuotaExceeded
 from app.core.logging import get_logger
-from app.core.redis import Keys, get_redis
+from app.models.billing import Metric
 from app.models.catalog import DataSource, GpuPricing, ModelPricing
 from app.models.tool_run import RunSource, ToolRun
-from app.models.user import Plan
 from app.schemas.tools import (
     AiMeta,
     Provenance,
     ProvenanceSource,
-    QuotaOut,
     ToolOutput,
     ToolRunOut,
 )
-from app.services import provenance_service
+from app.services import feature_service, provenance_service
 
 logger = get_logger("tools")
 
-# Daily run allowance per plan. Anonymous callers get a small taste — enough to
-# see that the tool works, not enough to make signing up optional.
-DAILY_RUN_LIMIT: Final[dict[str, int]] = {
-    "anonymous": 5,
-    Plan.FREE.value: 25,
-    Plan.PRO.value: 1_000,
-    Plan.TEAM.value: 5_000,
-    Plan.ENTERPRISE.value: 100_000,
-}
-
 Compute = Callable[[], ToolOutput] | Callable[[], Awaitable[ToolOutput]]
 
-
-@dataclass(frozen=True)
-class QuotaState:
-    metric: str
-    limit: int
-    used: int
-    period: str
-    resets_at: datetime
-    plan: str
-
-    @property
-    def remaining(self) -> int:
-        return max(0, self.limit - self.used)
-
-    @property
-    def exceeded(self) -> bool:
-        return self.used >= self.limit
-
-    def to_schema(self) -> QuotaOut:
-        return QuotaOut(
-            metric=self.metric,
-            limit=self.limit,
-            used=self.used,
-            remaining=self.remaining,
-            period=self.period,
-            resets_at=self.resets_at,
-            plan=self.plan,
-        )
+#: The run allowance used to be a dict here, alongside four others elsewhere.
+#: It now lives in `plan_quotas` and is read through `FeatureService` (M20).
+#: These two functions are kept as the tool engine's vocabulary — the routes
+#: and the run history endpoint ask about "quota", not about metrics.
+RUN_METRIC: Final = Metric.TOOL_RUNS_PER_DAY
 
 
-def _plan_key(identity: Identity) -> str:
-    return identity.plan.value if identity.is_authenticated else "anonymous"
+async def check_quota(db: AsyncSession, identity: Identity) -> feature_service.QuotaState:
+    """Read the counter without incrementing it."""
+    return await feature_service.check(db, identity, RUN_METRIC)
 
 
-def _period() -> tuple[str, datetime]:
-    """UTC day. Returns the bucket label and when it rolls over."""
-    now = utcnow()
-    tomorrow = (now + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
-    return now.strftime("%Y-%m-%d"), tomorrow.replace(tzinfo=UTC)
-
-
-async def check_quota(identity: Identity, *, metric: str = "tool_runs") -> QuotaState:
-    """Read the counter without incrementing it.
-
-    Fail-open on a Redis outage: an unavailable cache must not stop people
-    using the product. The trade is that an outage window is uncapped, which
-    is the right way round — the alternative is a cache failure looking like a
-    billing failure to every user at once.
-    """
-    period, resets_at = _period()
-    plan = _plan_key(identity)
-    limit = DAILY_RUN_LIMIT.get(plan, DAILY_RUN_LIMIT[Plan.FREE.value])
-
-    used = 0
-    try:
-        raw = await get_redis().get(Keys.quota(metric, identity.key, period))
-        used = int(raw) if raw else 0
-    except (RedisError, OSError, ValueError) as exc:
-        logger.warning("quota.read_failed", identity=identity.key, error=str(exc))
-
-    return QuotaState(
-        metric=metric,
-        limit=limit,
-        used=used,
-        period=period,
-        resets_at=resets_at,
-        plan=plan,
-    )
-
-
-async def consume_quota(identity: Identity, *, metric: str = "tool_runs") -> None:
-    period, resets_at = _period()
-    key = Keys.quota(metric, identity.key, period)
-    try:
-        redis = get_redis()
-        value = await redis.incr(key)
-        if value == 1:
-            # Expire slightly past the rollover so a run at 23:59:59 does not
-            # leave a key that outlives its own period.
-            await redis.expireat(key, int(resets_at.timestamp()) + 60)
-    except (RedisError, OSError) as exc:
-        logger.warning("quota.increment_failed", identity=identity.key, error=str(exc))
+async def consume_quota(db: AsyncSession, identity: Identity) -> feature_service.QuotaState:
+    """Take one run, or raise `QuotaExceeded` with the real figures."""
+    return await feature_service.consume(db, identity, RUN_METRIC)
 
 
 async def run_tool(
@@ -153,12 +70,13 @@ async def run_tool(
     compute: Compute,
     enrich: Callable[[ToolOutput], Awaitable[AiMeta | None]] | None = None,
 ) -> ToolRunOut:
-    quota = await check_quota(identity)
-    if quota.exceeded:
-        raise QuotaExceeded(
-            f"You have used all {quota.limit} runs for today.",
-            details={"quota": quota.to_schema().model_dump(mode="json")},
-        )
+    # Consumed up front rather than after the run persists (M20). The counter
+    # increments and compares in one Redis round trip, so two requests arriving
+    # together at the limit are both refused — where a read-then-run-then-write
+    # would let both through. The cost is that a compute that raises has still
+    # spent a run, which is the right way round: the alternative is a tool that
+    # can be run without ever being counted.
+    await consume_quota(db, identity)
 
     started = time.perf_counter()
     result = compute()
@@ -221,8 +139,6 @@ async def run_tool(
     )
     db.add(run)
     await db.flush()
-
-    await consume_quota(identity)
 
     logger.info(
         "tools.run",

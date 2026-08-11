@@ -104,6 +104,26 @@ class Settings(BaseSettings):
     #: no reason, so the threshold is on predicted size, not on format.
     export_async_threshold_bytes: int = 512 * 1024
 
+    # ── Billing (M20) ──────────────────────────────────────────────────────
+    #: Absent everywhere except staging and production. The billing module
+    #: imports and degrades — checkout returns a 402 that says so — exactly as
+    #: the AI layer does without an API key.
+    stripe_secret_key: str = ""
+    #: Verified on every webhook. A webhook endpoint that accepts unsigned
+    #: bodies is an unauthenticated "make me Pro" endpoint, so an unset secret
+    #: rejects rather than waves through.
+    stripe_webhook_secret: str = ""
+    #: Price ids, created by `python -m app.cli stripe-sync` rather than in the
+    #: dashboard, so environments are reproducible. Empty means that plan
+    #: cannot be checked out in this environment.
+    stripe_price_pro_monthly: str = ""
+    stripe_price_pro_annual: str = ""
+    stripe_price_team_monthly: str = ""
+    stripe_price_team_annual: str = ""
+    #: How long a failed payment keeps its features. Stripe's own dunning runs
+    #: retries inside this window; the downgrade happens when it gives up.
+    dunning_grace_days: int = 7
+
     # ── Observability ──────────────────────────────────────────────────────
     sentry_dsn: str = ""
     log_level: str = "INFO"
@@ -153,6 +173,13 @@ class Settings(BaseSettings):
         return bool(self.anthropic_api_key)
 
     @property
+    def billing_enabled(self) -> bool:
+        """Both halves, not just the key. A deploy with a secret key and no
+        webhook secret can take a payment and never hear that it succeeded,
+        which is the single worst state this module has."""
+        return bool(self.stripe_secret_key and self.stripe_webhook_secret)
+
+    @property
     def google_oauth_enabled(self) -> bool:
         return bool(self.google_client_id and self.google_client_secret)
 
@@ -173,6 +200,12 @@ class Settings(BaseSettings):
                 "AUTH_PRIVATE_KEY and AUTH_PUBLIC_KEY are required. "
                 "Generate them with: uv run python -m app.cli generate-keypair"
             )
+
+        # A secret key with no webhook secret is worse than no billing at all:
+        # checkout succeeds, the customer is charged, and nothing ever upgrades
+        # them because every delivery fails signature verification.
+        if self.stripe_secret_key and not self.stripe_webhook_secret:
+            problems.append("STRIPE_WEBHOOK_SECRET is required when STRIPE_SECRET_KEY is set.")
 
         if self.is_production:
             if not self.cookie_secure:

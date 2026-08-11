@@ -67,8 +67,9 @@ async def list_runs(
 
 
 @router.get("/quota", response_model=Envelope[QuotaOut], name="get_quota")
-async def get_quota(identity: CallerIdentity) -> dict[str, Any]:
-    quota = await tool_service.check_quota(identity)
+async def get_quota(db: Db, identity: CallerIdentity) -> dict[str, Any]:
+    """Just the run counter. `GET /billing/usage` returns every meter."""
+    quota = await tool_service.check_quota(db, identity)
     return ok(quota.to_schema())
 
 

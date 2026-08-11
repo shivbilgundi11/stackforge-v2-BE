@@ -116,12 +116,17 @@ class QuotaOut(BaseModel):
 
     "You have hit your limit" with no figures is a dead end; "42 of 42 runs
     used, resets in 6 hours" tells the user whether to upgrade or wait.
+
+    `limit` and `remaining` are null on an unlimited plan, and `resets_at` is
+    null for a metric that counts rows rather than a period (M20). Null rather
+    than a large sentinel: a meter reading "3 of 999999" is a meter nobody
+    believes, and the client has to branch on the unlimited case regardless.
     """
 
     metric: str
-    limit: int
+    limit: int | None
     used: int
-    remaining: int
+    remaining: int | None
     period: str
-    resets_at: datetime
+    resets_at: datetime | None
     plan: str

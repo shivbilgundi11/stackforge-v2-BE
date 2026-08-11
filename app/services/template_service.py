@@ -30,8 +30,8 @@ from sqlalchemy.sql.elements import ColumnElement
 from app.api.deps import Identity
 from app.core.errors import NotFound
 from app.core.logging import get_logger
+from app.data.plans import Feature
 from app.models.template import Difficulty, Template, TemplateCategory
-from app.models.user import Plan
 
 logger = get_logger("templates")
 
@@ -82,17 +82,16 @@ CATEGORY_BLURBS: Final[dict[str, str]] = {
 }
 
 
-PLAN_RANK: Final[dict[Plan, int]] = {
-    Plan.FREE: 0,
-    Plan.PRO: 1,
-    Plan.TEAM: 2,
-    Plan.ENTERPRISE: 3,
-}
-
-
 def can_unlock(identity: Identity) -> bool:
-    """Premium content needs Pro. Read access never does."""
-    return PLAN_RANK[identity.plan] >= PLAN_RANK[Plan.PRO]
+    """Premium content needs Pro. Read access never does.
+
+    The plan comparison moved to `FeatureService` in M20 — this module used to
+    carry its own rank table, which is one of the five copies that made "what
+    does Free get" a question with five answers.
+    """
+    from app.services import feature_service
+
+    return feature_service.can(identity, Feature.PREMIUM_TEMPLATES).allowed
 
 
 @dataclass(frozen=True)

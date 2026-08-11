@@ -262,11 +262,14 @@ async def test_the_free_plan_has_no_projects(client: AsyncClient, db: AsyncSessi
 
 
 async def test_the_project_limit_is_enforced_per_plan(
-    client: AsyncClient, db: AsyncSession, monkeypatch: pytest.MonkeyPatch
+    client: AsyncClient, db: AsyncSession
 ) -> None:
-    from app.services import project_service
+    """Also asserts M20's promise that a limit changes without a deploy: the
+    cap is lowered by writing the row, not by patching a constant."""
+    from app.models.billing import Metric
+    from tests.conftest import set_limit
 
-    monkeypatch.setitem(project_service.PROJECT_LIMIT, Plan.PRO.value, 2)
+    await set_limit(db, plan=Plan.PRO, metric=Metric.PROJECTS, value=2)
     await _sign_in(client, db, "limited@example.com")
 
     for index in range(2):

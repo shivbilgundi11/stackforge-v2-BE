@@ -216,7 +216,10 @@ async def overview(db: AsyncSession, user: User) -> dict[str, Any]:
         "usage": {
             **await run_service.counts_for(db, user),
             "projects": await project_service.count_for(db, user),
-            "project_limit": project_service.limit_for(user),
+            # `None` is unlimited (M20). The dashboard renders the word rather
+            # than a number, so the meter does not claim a ceiling that is not
+            # there.
+            "project_limit": await project_service.limit_for(db, user),
         },
         "plan": {"plan": user.plan.value, "source": user.plan_source.value},
     }

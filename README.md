@@ -6,7 +6,8 @@ FastAPI backend for the StackForge AI engineering workbench.
 
 - Python 3.13 (managed by `uv`)
 - PostgreSQL 16+ with the `citext` extension
-- Redis 7 *(optional today — nothing in the auth layer needs it yet)*
+- Redis 7 *(quota counters, the catalog cache, and the job queue — every one of
+  them degrades rather than fails without it, so the API still boots and serves)*
 
 ## Setup
 
@@ -47,6 +48,8 @@ are printed to the API log.
 | `uv run alembic revision --autogenerate -m "…"` | New migration |
 | `uv run alembic upgrade head` | Apply migrations |
 | `uv run python -m app.cli openapi` | Dump the OpenAPI schema |
+| `uv run python -m app.cli seed` | Load the catalog, templates, and plan quotas |
+| `uv run python -m app.cli stripe-sync` | Create the Stripe products and prices |
 
 ## Layout
 
@@ -77,13 +80,61 @@ seed in this repo (D-43): the file is the source of truth, and there is no
 editorial review loop for a template to undo. View and copy counts are never
 reset.
 
+## Billing and quotas
+
+**Every limit is a row in `plan_quotas`, not a constant.** Changing the free
+tier from 25 runs to 10 is one `UPDATE` and takes effect within a minute — the
+limits are cached in-process for 60 seconds and nothing else needs restarting.
+The pricing page reads the same table, so a marketing number and an enforced
+number cannot drift apart.
+
+`FeatureService` is the only place a plan question is answered:
+
+```python
+feature_service.can(identity, Feature.EXPORT_PDF)              # Allow | Deny
+feature_service.check(db, identity, Metric.TOOL_RUNS_PER_DAY)  # QuotaState
+feature_service.consume(db, identity, Metric.TOOL_RUNS_PER_DAY)  # or raises 402
+```
+
+Routes use the `require_feature(...)` and `consume_quota(...)` dependencies. No
+route contains a plan comparison, and no service keeps its own limit table.
+
+Stripe is optional. Without `STRIPE_SECRET_KEY` the module imports, checkout
+returns a 402 that says so, and the pricing page hides its buy buttons — which
+is the state local development and CI run in. To exercise the real path:
+
+```bash
+uv run python -m app.cli stripe-sync     # creates products and prices, prints the ids
+stripe listen --forward-to localhost:8000/api/v1/billing/webhook
+```
+
+Webhook deliveries are recorded in `stripe_events` **before** they are
+processed, and `processed_at` — not the row's existence — is what marks one
+done (D-45). A handler that raises leaves an unprocessed row with its error, an
+hourly job retries it, and the endpoint still answers 200 so Stripe does not
+disable it.
+
 ## Background work
 
-The worker (`arq`) owns two jobs: building export bundles that are predicted to
-be large, and the nightly purge of expired exports. Neither is required for the
-API to serve traffic — an export that cannot be queued is built inside the
-request instead, and the purge only reclaims storage — so local development
-without a worker is a supported state, just a slower and untidier one.
+The worker (`arq`) owns the export jobs and the billing clock. Nothing here is
+required for the API to serve traffic — an export that cannot be queued is
+built inside the request instead — so local development without a worker is a
+supported state, just a slower and untidier one.
+
+| Job | Schedule | What it does |
+| --- | --- | --- |
+| `build_export` | on demand | Renders a bundle predicted to be large |
+| `purge_expired_exports` | 03:17 daily | Reclaims storage from expired exports |
+| `retry_stripe_events` | hourly | Re-runs webhook deliveries whose handler failed |
+| `expire_trials` | 02:11 daily | Drops an expired no-card trial to Free |
+| `close_dunning` | 02:29 daily | Downgrades a payment that never recovered |
+| `reconcile_usage` | 23:47 daily | Compares the Redis counters against `usage_records` |
+| `price_change_alerts` | 08:13 daily | Emails Pro+ users whose saved estimates moved >10 % |
+| `deprecation_alerts` | Mondays 08:41 | Emails Pro+ users whose saved stacks hold a buried tool |
+
+Reconciliation **reports** divergence and never corrects it. A drift means the
+metering is wrong, and silently fixing the number removes the only signal that
+says so.
 
 ## PDF export
 
@@ -113,3 +164,7 @@ downgrade must be an error rather than a log line.
 - **Tests assert computed values**, not status codes.
 - Migrations are expand-then-contract, and the downgrade must drop enum types
   or the round trip fails.
+- **No plan comparison outside `FeatureService`.** A `PLAN_RANK` lookup in a
+  service is how "what does Free get" became a question with five answers.
+- **Unlimited is `None`, never a large number** (D-47). A sentinel renders as a
+  real limit and invites arithmetic that treats it as one.

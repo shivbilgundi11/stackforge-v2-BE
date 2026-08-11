@@ -23,7 +23,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.deps import Identity
 from app.core.config import settings
 from app.models.ai import AiCall, AiOutcome
+from app.models.billing import Metric
+from app.models.user import Plan
 from app.services import ai_pricing, ai_prompts, ai_service
+from tests.conftest import set_limit
 
 
 @pytest.fixture(autouse=True)
@@ -183,7 +186,7 @@ async def test_exhausted_quota_returns_none_without_calling_the_model(
     monkeypatch.setattr(settings, "anthropic_api_key", "sk-test")
     client = _client(response=_response())
     ai_service.set_client(client)
-    monkeypatch.setitem(ai_service.DAILY_AI_LIMIT, "anonymous", 0)
+    await set_limit(db, plan=Plan.FREE, metric=Metric.AI_CALLS_PER_DAY, value=0, anonymous=True)
 
     assert await _generate(db) is None
     assert client.messages.calls == []
@@ -223,7 +226,7 @@ async def test_the_system_prompt_is_marked_cacheable_and_never_varies(
     A variable interpolated into the system text would put it ahead of the
     breakpoint and silently make every request a cache miss."""
     monkeypatch.setattr(settings, "anthropic_api_key", "sk-test")
-    monkeypatch.setitem(ai_service.DAILY_AI_LIMIT, "anonymous", 5)
+    await set_limit(db, plan=Plan.FREE, metric=Metric.AI_CALLS_PER_DAY, value=5, anonymous=True)
     client = _client(response=_response())
     ai_service.set_client(client)
 
@@ -353,7 +356,7 @@ async def test_a_repeat_call_reports_cached_reads(
     """What proves caching is on: the second call's prompt is served from the
     cache, and the figure is recorded separately so it can be seen at all."""
     monkeypatch.setattr(settings, "anthropic_api_key", "sk-test")
-    monkeypatch.setitem(ai_service.DAILY_AI_LIMIT, "anonymous", 5)
+    await set_limit(db, plan=Plan.FREE, metric=Metric.AI_CALLS_PER_DAY, value=5, anonymous=True)
     ai_service.set_client(_client(response=_response(cache_write=1_500)))
     await _generate(db)
 

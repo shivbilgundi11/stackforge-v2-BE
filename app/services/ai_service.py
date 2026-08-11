@@ -20,7 +20,6 @@ from __future__ import annotations
 import json
 import time
 from collections.abc import Awaitable, Callable
-from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from typing import Any, Final, NamedTuple
 
@@ -32,33 +31,18 @@ from anthropic.types import (
     TextBlockParam,
     ThinkingConfigAdaptiveParam,
 )
-from redis.exceptions import RedisError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import Identity
 from app.core.config import settings
 from app.core.database import utcnow
 from app.core.logging import get_logger
-from app.core.redis import Keys, get_redis
 from app.models.ai import AiCall, AiOutcome
-from app.models.user import Plan
+from app.models.billing import Metric
 from app.schemas.tools import AiMeta, ToolOutput, ToolWarning
 from app.services import ai_pricing, ai_prompts
 
 logger = get_logger("ai")
-
-#: AI calls are metered separately from tool runs because they carry a real
-#: marginal cost. Exceeding this returns the **rule-based result**, not a 402:
-#: the user still gets their answer with a note. Blocking a whole tool because
-#: the enrichment allowance ran out would be a worse product and a worse
-#: upgrade prompt.
-DAILY_AI_LIMIT: Final[dict[str, int]] = {
-    "anonymous": 1,
-    Plan.FREE.value: 3,
-    Plan.PRO.value: 100,
-    Plan.TEAM.value: 300,
-    Plan.ENTERPRISE.value: 2_000,
-}
 
 #: A synthesis call that has not answered in this long is not going to save the
 #: request. The deterministic result is already computed and waiting.
@@ -93,43 +77,43 @@ class AiResult(NamedTuple):
     meta: AiMeta
 
 
-def _plan_key(identity: Identity) -> str:
-    return identity.plan.value if identity.is_authenticated else "anonymous"
+async def quota_remaining(db: AsyncSession, identity: Identity) -> int | None:
+    """How many AI calls are left today. `None` is unlimited.
 
+    AI calls are metered separately from tool runs because they carry a real
+    marginal cost. Exhausting the allowance returns the **rule-based result**,
+    not a 402: the user still gets their answer, with a note. Blocking a whole
+    tool because the enrichment allowance ran out would be a worse product and
+    a worse upgrade prompt.
 
-def _period() -> tuple[str, datetime]:
-    now = utcnow()
-    tomorrow = (now + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
-    return now.strftime("%Y-%m-%d"), tomorrow.replace(tzinfo=UTC)
-
-
-async def quota_remaining(identity: Identity) -> int:
-    """Fail-open on a Redis outage, exactly as tool quota does.
-
-    An unavailable cache must not stop people using the product; the trade is
-    that an outage window is uncapped, which is the right way round.
+    The limit itself comes from `plan_quotas` through `FeatureService` (M20),
+    which is also where the fail-open-on-Redis-outage behaviour now lives.
     """
-    period, _ = _period()
-    limit = DAILY_AI_LIMIT.get(_plan_key(identity), DAILY_AI_LIMIT[Plan.FREE.value])
-    try:
-        raw = await get_redis().get(Keys.quota("ai_calls", identity.key, period))
-        used = int(raw) if raw else 0
-    except (RedisError, OSError, ValueError) as exc:
-        logger.warning("ai.quota_read_failed", error=str(exc))
-        return limit
-    return max(0, limit - used)
+    from app.services import feature_service
+
+    state = await feature_service.check(db, identity, Metric.AI_CALLS_PER_DAY)
+    return state.remaining
 
 
-async def _consume_quota(identity: Identity) -> None:
-    period, resets_at = _period()
-    key = Keys.quota("ai_calls", identity.key, period)
-    try:
-        redis = get_redis()
-        value = await redis.incr(key)
-        if value == 1:
-            await redis.expireat(key, int(resets_at.timestamp()) + 60)
-    except (RedisError, OSError) as exc:
-        logger.warning("ai.quota_increment_failed", error=str(exc))
+def _exhausted(remaining: int | None) -> bool:
+    """`None` is unlimited, so it is never exhausted.
+
+    A plain `remaining <= 0` would read `None` as falsy in some hands and raise
+    a TypeError in others; naming the question stops both.
+    """
+    return remaining is not None and remaining <= 0
+
+
+async def _consume_quota(db: AsyncSession, identity: Identity) -> None:
+    """Count a call that has already happened.
+
+    `record` rather than `consume`: the decision to allow was made before the
+    model call, and a paid call that succeeded must be counted whether or not
+    the allowance has since been reached.
+    """
+    from app.services import feature_service
+
+    await feature_service.record(db, identity, Metric.AI_CALLS_PER_DAY)
 
 
 async def generate_json(
@@ -159,7 +143,7 @@ async def generate_json(
         await _record(db, prompt, identity, tool_slug, AiOutcome.DISABLED, latency_ms=0)
         return None
 
-    if await quota_remaining(identity) <= 0:
+    if _exhausted(await quota_remaining(db, identity)):
         await _record(db, prompt, identity, tool_slug, AiOutcome.QUOTA_EXCEEDED, latency_ms=0)
         return None
 
@@ -228,7 +212,7 @@ async def generate_json(
             usage=usage,
             detail=_refusal_category(response),
         )
-        await _consume_quota(identity)
+        await _consume_quota(db, identity)
         return None
 
     data = _first_json(response)
@@ -243,7 +227,7 @@ async def generate_json(
             usage=usage,
             detail=f"stop_reason={getattr(response, 'stop_reason', None)}",
         )
-        await _consume_quota(identity)
+        await _consume_quota(db, identity)
         return None
 
     cost = ai_pricing.cost_of(model=prompt.model, **usage)
@@ -257,7 +241,7 @@ async def generate_json(
         usage=usage,
         cost=cost,
     )
-    await _consume_quota(identity)
+    await _consume_quota(db, identity)
 
     logger.info(
         "ai.call",
@@ -305,7 +289,7 @@ def enrichment(
     """
 
     async def enrich(output: ToolOutput) -> AiMeta | None:
-        if await quota_remaining(identity) <= 0:
+        if _exhausted(await quota_remaining(db, identity)):
             output.warnings.append(
                 ToolWarning(
                     level="info",

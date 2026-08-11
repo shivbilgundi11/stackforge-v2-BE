@@ -1,6 +1,6 @@
 """The arq queue, and the jobs on it (D-05, first used by M18).
 
-Two jobs, and neither of them is a fetcher:
+Exports first, then everything M20 needs a clock for:
 
   * `build_export` — renders a queued export and writes the bytes back onto
     its row. Only bundles over the size threshold get here; a 2 KB Markdown
@@ -9,6 +9,13 @@ Two jobs, and neither of them is a fetcher:
     definition of done both require that expired export objects leave storage,
     and because the bytes live on the row this is one statement rather than a
     reconciliation between a table and a bucket.
+  * `retry_stripe_events` · `expire_trials` · `close_dunning` ·
+    `reconcile_usage` · `price_change_alerts` · `deprecation_alerts` — the
+    billing clock. Their logic lives in `workers/billing.py`; what is here is
+    the session handling and the schedule.
+
+Every cron job below is at-least-once and every one of them is written to be
+safe run twice, because arq offers no other guarantee.
 
 **Enqueuing degrades rather than fails.** `enqueue` returns False when Redis
 is unreachable and the caller builds inline instead. The alternative is a
@@ -31,6 +38,7 @@ from app.core.database import SessionLocal
 from app.core.logging import configure_logging, get_logger
 from app.models.export import Export, ExportStatus
 from app.services import export_service
+from app.workers import billing as billing_jobs
 
 logger = get_logger("worker")
 
@@ -38,6 +46,7 @@ logger = get_logger("worker")
 #: sides, so they live here once rather than as literals at call sites.
 BUILD_EXPORT = "build_export"
 PURGE_EXPORTS = "purge_expired_exports"
+RETRY_STRIPE_EVENTS = "retry_stripe_events"
 
 
 def redis_settings() -> RedisSettings:
@@ -141,6 +150,55 @@ async def purge_expired_exports(_context: dict[str, Any]) -> int:
         return removed
 
 
+# ── billing (M20) ────────────────────────────────────────────────────────────
+#
+# Six thin wrappers. Each one opens a session, calls into `workers.billing`,
+# and commits — the logic is over there so it can be tested against a session
+# without a queue, which is the same split `build_export` uses.
+
+
+async def retry_stripe_events(_context: dict[str, Any]) -> int:
+    async with SessionLocal() as session:
+        processed = await billing_jobs.retry_failed_events(session)
+        await session.commit()
+        return processed
+
+
+async def expire_trials(_context: dict[str, Any]) -> int:
+    async with SessionLocal() as session:
+        expired = await billing_jobs.expire_trials(session)
+        await session.commit()
+        return expired
+
+
+async def close_dunning(_context: dict[str, Any]) -> int:
+    async with SessionLocal() as session:
+        closed = await billing_jobs.close_dunning(session)
+        await session.commit()
+        return closed
+
+
+async def reconcile_usage(_context: dict[str, Any]) -> int:
+    """Read-only by design. Divergence is reported, never corrected."""
+    async with SessionLocal() as session:
+        result = await billing_jobs.reconcile_usage(session)
+        return len(result.diverged)
+
+
+async def price_change_alerts(_context: dict[str, Any]) -> int:
+    async with SessionLocal() as session:
+        sent = await billing_jobs.send_price_change_alerts(session)
+        await session.commit()
+        return sent
+
+
+async def deprecation_alerts(_context: dict[str, Any]) -> int:
+    async with SessionLocal() as session:
+        sent = await billing_jobs.send_deprecation_alerts(session)
+        await session.commit()
+        return sent
+
+
 # ── worker ───────────────────────────────────────────────────────────────────
 
 
@@ -159,13 +217,40 @@ async def shutdown(_context: dict[str, Any]) -> None:
 class WorkerSettings:
     """`uv run arq app.workers.queue.WorkerSettings`."""
 
-    functions: ClassVar[list[Any]] = [build_export, purge_expired_exports]
+    functions: ClassVar[list[Any]] = [
+        build_export,
+        purge_expired_exports,
+        retry_stripe_events,
+        expire_trials,
+        close_dunning,
+        reconcile_usage,
+        price_change_alerts,
+        deprecation_alerts,
+    ]
     cron_jobs: ClassVar[list[Any]] = [
-        # 03:17 rather than on the hour. Every scheduled job in every service
-        # firing at :00 is how a database gets a load spike it did not need.
-        # `cron` is typed against arq's own coroutine protocol, which a
-        # plain async function satisfies structurally but not nominally.
-        cron(purge_expired_exports, hour=3, minute=17, run_at_startup=False)  # type: ignore[arg-type]
+        # Staggered minutes, and none of them on the hour. Every scheduled job
+        # in every service firing at :00 is how a database gets a load spike it
+        # did not need.
+        #
+        # `cron` is typed against arq's own coroutine protocol, which a plain
+        # async function satisfies structurally but not nominally.
+        cron(purge_expired_exports, hour=3, minute=17, run_at_startup=False),  # type: ignore[arg-type]
+        # Hourly. A failed webhook is a customer who paid and was not upgraded,
+        # so the retry loop is the one billing job that cannot wait for night.
+        cron(retry_stripe_events, minute=23, run_at_startup=False),  # type: ignore[arg-type]
+        # Both lifecycle jobs run early, before anyone is using the product, so
+        # a downgrade never lands mid-session.
+        cron(expire_trials, hour=2, minute=11, run_at_startup=False),  # type: ignore[arg-type]
+        cron(close_dunning, hour=2, minute=29, run_at_startup=False),  # type: ignore[arg-type]
+        # Just before the UTC day rolls over, while the counters it compares
+        # still describe the same period.
+        cron(reconcile_usage, hour=23, minute=47, run_at_startup=False),  # type: ignore[arg-type]
+        # Alerts land in the morning rather than overnight. An email that
+        # arrives at 03:00 is read at the bottom of an inbox.
+        cron(price_change_alerts, hour=8, minute=13, run_at_startup=False),  # type: ignore[arg-type]
+        # Weekly, Monday. A deprecation is not urgent enough to be daily, and a
+        # daily version of this email is one people unsubscribe from.
+        cron(deprecation_alerts, weekday=0, hour=8, minute=41, run_at_startup=False),  # type: ignore[arg-type]
     ]
     on_startup = startup
     on_shutdown = shutdown
@@ -177,8 +262,15 @@ class WorkerSettings:
 __all__ = [
     "BUILD_EXPORT",
     "PURGE_EXPORTS",
+    "RETRY_STRIPE_EVENTS",
     "WorkerSettings",
     "build_export",
+    "close_dunning",
+    "deprecation_alerts",
     "enqueue",
+    "expire_trials",
+    "price_change_alerts",
     "purge_expired_exports",
+    "reconcile_usage",
+    "retry_stripe_events",
 ]
