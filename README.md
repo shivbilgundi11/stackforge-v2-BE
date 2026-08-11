@@ -38,6 +38,7 @@ are printed to the API log.
 | | |
 | --- | --- |
 | `uv run uvicorn app.main:app --reload` | Run the API |
+| `uv run arq app.workers.queue.WorkerSettings` | Run the background worker |
 | `uv run pytest` | Test suite |
 | `uv run pytest --cov=app` | With coverage |
 | `uv run ruff check app tests` | Lint |
@@ -60,6 +61,32 @@ app/
 alembic/         migrations
 tests/           unit (no database) + integration (real Postgres)
 ```
+
+## Background work
+
+The worker (`arq`) owns two jobs: building export bundles that are predicted to
+be large, and the nightly purge of expired exports. Neither is required for the
+API to serve traffic — an export that cannot be queued is built inside the
+request instead, and the purge only reclaims storage — so local development
+without a worker is a supported state, just a slower and untidier one.
+
+## PDF export
+
+Two backends behind one interface (D-41). `PDF_BACKEND=auto`, the default, uses
+headless Chromium when Playwright is importable and falls back to ReportLab
+otherwise, logging which it chose.
+
+Chromium is the production path and produces the client-ready output the
+feature is sold on. It is **not** installed by `uv sync`, because it costs a
+~400 MB image the API does not need:
+
+```bash
+uv pip install playwright && uv run playwright install chromium
+```
+
+Without it, exports still work — they just look like a generated report rather
+than a designed one. Pin `PDF_BACKEND=chromium` in any environment where the
+downgrade must be an error rather than a log line.
 
 ## Conventions
 

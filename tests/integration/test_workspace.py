@@ -296,12 +296,18 @@ async def test_an_item_the_user_does_not_own_cannot_be_attached(
 async def test_an_unbuilt_item_type_is_refused_rather_than_dangling(
     client: AsyncClient, db: AsyncSession
 ) -> None:
-    await _sign_in(client, db, "artifacts@example.com")
+    """`template` is the remaining unbuilt type — M19 gives it a table.
+
+    `artifact` was here too until M18 gave artifacts one; the refusal is about
+    what can be *resolved*, so the list shrinks as tables arrive rather than
+    staying as a permanent denial.
+    """
+    await _sign_in(client, db, "templates@example.com")
     project = (await client.post(PROJECTS, json={"name": "Future"})).json()["data"]
 
     response = await client.post(
         f"{PROJECTS}/{project['id']}/items",
-        json={"item_type": "artifact", "item_id": "art_whatever"},
+        json={"item_type": "template", "item_id": "tpl_whatever"},
     )
     assert response.status_code == 422
 

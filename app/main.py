@@ -17,12 +17,14 @@ from app.api.v1 import auth as auth_router
 from app.api.v1 import catalog as catalog_router
 from app.api.v1 import compare as compare_router
 from app.api.v1 import cost as cost_router
+from app.api.v1 import exports as exports_router
 from app.api.v1 import health as health_router
 from app.api.v1 import infra as infra_router
 from app.api.v1 import projects as projects_router
 from app.api.v1 import rag as rag_router
 from app.api.v1 import roi as roi_router
 from app.api.v1 import runs as runs_router
+from app.api.v1 import shares as shares_router
 from app.api.v1 import stacks as stacks_router
 from app.api.v1 import workspace as workspace_router
 from app.core.config import settings
@@ -176,6 +178,11 @@ app.include_router(architect_router.router, prefix="/api/v1/architect")
 app.include_router(stacks_router.router, prefix="/api/v1/stacks")
 app.include_router(runs_router.router, prefix="/api/v1/runs")
 app.include_router(projects_router.router, prefix="/api/v1/projects")
+app.include_router(exports_router.router, prefix="/api/v1/exports")
+# Mounted at the version root rather than under a prefix: this router owns both
+# `/shares` (owner, authenticated) and `/s/{token}` (public, unauthenticated),
+# and the public path is deliberately short — it is pasted into chat messages.
+app.include_router(shares_router.router, prefix="/api/v1")
 app.include_router(workspace_router.router, prefix="/api/v1")
 
 

@@ -91,6 +91,19 @@ class Settings(BaseSettings):
     # ── AI ─────────────────────────────────────────────────────────────────
     anthropic_api_key: str = ""
 
+    # ── Exports (M18) ──────────────────────────────────────────────────────
+    #: `auto` uses headless Chromium when Playwright is importable and falls
+    #: back to ReportLab otherwise (Q-01). Pin it explicitly in an environment
+    #: where the answer must not depend on what happens to be installed.
+    pdf_backend: Literal["auto", "chromium", "reportlab"] = "auto"
+    #: Rendered export bytes are a cache over deterministic generators, so the
+    #: window only has to be long enough for someone to click download.
+    export_ttl_days: int = 7
+    #: Above this, a bundle is queued instead of built in the request. A 2 KB
+    #: Markdown export going through a queue would be a worse experience for
+    #: no reason, so the threshold is on predicted size, not on format.
+    export_async_threshold_bytes: int = 512 * 1024
+
     # ── Observability ──────────────────────────────────────────────────────
     sentry_dsn: str = ""
     log_level: str = "INFO"

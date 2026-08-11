@@ -56,7 +56,10 @@ def get_redis() -> Redis:
     """
     global _client
     if _client is None:
-        _client = from_url(
+        # `from_url` is untyped on redis-py 5.x. The client is pinned below 6
+        # by arq (M18) — see D-36 — and 5.x ships `from_url` without
+        # annotations, so the call has to be excused rather than fixed here.
+        _client = from_url(  # type: ignore[no-untyped-call]
             settings.redis_url,
             encoding="utf-8",
             decode_responses=True,

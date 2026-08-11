@@ -33,6 +33,13 @@ from app.models.catalog import (
     ToolCategory,
     ToolStatus,
 )
+from app.models.export import (
+    Export,
+    ExportFormat,
+    ExportStatus,
+    ShareLink,
+    SourceType,
+)
 from app.models.project import Project, ProjectItem, ProjectItemType
 from app.models.stack import Stack, StackVersion
 from app.models.tool_run import RunSource, ToolRun
@@ -49,6 +56,9 @@ __all__ = [
     "CatalogFlag",
     "Compatibility",
     "DataSource",
+    "Export",
+    "ExportFormat",
+    "ExportStatus",
     "FlagStatus",
     "GpuPricing",
     "LifecycleStatus",
@@ -65,7 +75,9 @@ __all__ = [
     "ProjectItemType",
     "RunSource",
     "Session",
+    "ShareLink",
     "SourceKind",
+    "SourceType",
     "Stack",
     "StackVersion",
     "TokenPurpose",

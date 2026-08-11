@@ -20,6 +20,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.database import utcnow
 from app.core.errors import NotFound, QuotaExceeded, ValidationFailed
 from app.core.logging import get_logger
+from app.models.export import Export
 from app.models.project import Project, ProjectItem, ProjectItemType
 from app.models.stack import Stack
 from app.models.tool_run import ToolRun
@@ -40,9 +41,15 @@ PROJECT_LIMIT: Final[dict[str, int]] = {
 
 #: How an item type resolves to a row, so a project can render its contents
 #: without the caller knowing the shape of each one.
+#:
+#: `ARTIFACT` maps onto `exports`, added by M18. An artifact is not a row of
+#: its own — it is a rendered export of a run or a stack — so "save this to a
+#: project" saves the thing that was rendered rather than a fresh noun with its
+#: own lifecycle to keep in step.
 ITEM_MODELS: Final = {
     ProjectItemType.RUN: ToolRun,
     ProjectItemType.STACK: Stack,
+    ProjectItemType.ARTIFACT: Export,
 }
 
 
@@ -211,9 +218,9 @@ async def _assert_owns_item(
 ) -> None:
     model = ITEM_MODELS.get(item_type)
     if model is None:
-        # Artifacts and templates have no table yet (M18, M19). Refusing is
-        # right: silently accepting an id nothing can resolve would produce a
-        # project full of rows that render as nothing.
+        # Templates have no table yet (M19). Refusing is right: silently
+        # accepting an id nothing can resolve would produce a project full of
+        # rows that render as nothing.
         raise ValidationFailed.on_field(
             "item_type", f"{item_type.value} items cannot be attached yet."
         )

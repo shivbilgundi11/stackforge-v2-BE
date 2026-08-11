@@ -14,7 +14,9 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import CurrentUser, Db
+from app.core.database import utcnow
 from app.core.responses import Envelope, ok
+from app.models.export import Export
 from app.models.project import Project, ProjectItem, ProjectItemType
 from app.models.stack import Stack
 from app.models.tool_run import ToolRun
@@ -129,6 +131,15 @@ async def _resolve(db: AsyncSession, item: ProjectItem) -> ProjectItemOut:
             title = stack.name
             subtitle = ", ".join(stack.component_slugs[:4])
             href = f"/stack-architect/my-stacks?stack={stack.id}"
+    elif item.item_type is ProjectItemType.ARTIFACT:
+        export = await db.get(Export, item.item_id)
+        # An expired export is a dangling item like any other: the row may
+        # still be here while the bytes are already gone, and a download link
+        # that 404s is worse than one the UI knows not to offer.
+        if export is not None and export.expires_at > utcnow():
+            title = export.filename
+            subtitle = f"{export.format.value} · {export.size_bytes:,} bytes"
+            href = f"/api/v1/exports/{export.id}/download"
 
     return ProjectItemOut(
         id=item.id,

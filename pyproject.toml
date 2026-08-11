@@ -41,6 +41,21 @@ dependencies = [
     # open-weight models, both replacing ceil(chars / 4).
     "tiktoken>=0.8",
     "tokenizers>=0.21",
+    # M18. Markdown is the source format for every generated document, so both
+    # PDF backends start from it: `markdown` renders the HTML the Chromium
+    # backend prints, and the ReportLab backend walks the same tokens. Neither
+    # dependency is optional — the module must import and pick a backend, not
+    # fail to import (the same rule the AI SDK follows).
+    #
+    # Playwright is deliberately *not* here. It is the recommended production
+    # backend (Q-01) and it costs a ~400 MB image, so it is installed in the
+    # PDF worker image only; `pdf_service` falls back to ReportLab and says so
+    # in the logs when it is absent.
+    "markdown>=3.7",
+    "reportlab>=4.2",
+    # D-05, finally used: bundle generation and the export purge are the first
+    # work in this program that does not belong inside a request.
+    "arq>=0.26",
 ]
 
 [dependency-groups]
@@ -60,6 +75,8 @@ dev = [
     # way to know it runs is to run it.
     "mcp>=1.9",
     "types-jsonschema>=4.23",
+    "types-markdown>=3.10.2.20260712",
+    "types-reportlab>=4.5.1.20260807",
 ]
 
 [tool.uv]
@@ -121,7 +138,10 @@ plugins = ["pydantic.mypy"]
 exclude = ["alembic/versions/"]
 
 [[tool.mypy.overrides]]
-module = ["fakeredis.*", "uuid_extensions.*", "asgi_lifespan.*"]
+# `playwright` is deliberately absent from the runtime dependencies — it is the
+# PDF worker image's, not the API's — so the import inside `pdf_service` is
+# unresolvable here by design rather than by omission.
+module = ["fakeredis.*", "uuid_extensions.*", "asgi_lifespan.*", "playwright.*"]
 ignore_missing_imports = true
 
 # ---------------------------------------------------------------------------
