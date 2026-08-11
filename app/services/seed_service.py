@@ -131,6 +131,7 @@ async def seed_all(db: AsyncSession, *, refresh: bool = False) -> SeedReport:
     await _seed_tools(db, report, refresh=refresh)
     await db.flush()
     await _seed_compatibility(db, report, refresh=refresh)
+    await _seed_templates(db, report, refresh=refresh)
     await _find_unmanaged(db, report)
 
     logger.info(
@@ -382,6 +383,74 @@ async def _seed_compatibility(db: AsyncSession, report: SeedReport, *, refresh: 
             skipped += 1
 
     report.note("compatibility_matrix", inserted, updated, skipped)
+
+
+async def _seed_templates(db: AsyncSession, report: SeedReport, *, refresh: bool) -> None:
+    """Load `app/data/templates/` into the table (M19).
+
+    Templates break the non-destructive default that governs the rest of this
+    module, and the difference is worth stating. A price is corrected by an
+    *editor* through the flag-and-review loop, so a seeder that overwrote it
+    would undo human work — that is why everything above is insert-only unless
+    `--refresh` is passed.
+
+    A template has no such loop. The Markdown file **is** the source of truth;
+    there is no admin UI and nothing else writes `content_markdown`. So a
+    changed file always wins, and editing a typo is a commit plus a seed run
+    rather than a commit plus a flag passed to a command nobody remembers.
+
+    The two columns that are *not* overwritten are `view_count` and
+    `copy_count`. Those are measurements, not content, and resetting them on
+    every deploy would destroy the only reliable input to the content roadmap.
+    """
+    from app.data.templates_loader import load_all
+    from app.models.template import Difficulty, Template, TemplateCategory
+
+    seeds = load_all()
+    existing = {row.slug: row for row in (await db.execute(select(Template))).scalars().all()}
+
+    inserted = updated = skipped = 0
+    published = utcnow()
+
+    for seed in seeds:
+        current = existing.get(seed.slug)
+        values = {
+            "title": seed.title,
+            "category": TemplateCategory(seed.category),
+            "difficulty": Difficulty(seed.difficulty),
+            "summary": seed.summary.strip(),
+            "content_markdown": seed.content_markdown,
+            "files": [file.as_dict() for file in seed.files],
+            "stack_input": seed.stack_input,
+            "use_cases": seed.use_cases,
+            "tags": seed.tags,
+            "related_tools": seed.related_tools,
+            "is_premium": seed.is_premium,
+        }
+
+        if current is None:
+            db.add(Template(id=new_id("tpl"), slug=seed.slug, published_at=published, **values))
+            inserted += 1
+            continue
+
+        # Compared before writing so the report distinguishes "three templates
+        # changed" from "thirty templates were touched", which is the only way
+        # a seed run tells an operator anything.
+        changed = any(getattr(current, attr) != value for attr, value in values.items())
+        if not changed:
+            skipped += 1
+            continue
+
+        for attr, value in values.items():
+            setattr(current, attr, value)
+        updated += 1
+
+    report.note("templates", inserted, updated, skipped)
+
+    # Deliberately not deleted. A template file removed in a branch that is
+    # later reverted would otherwise take its view and copy counts with it, and
+    # `_find_unmanaged` already reports the row so the removal is visible.
+    _ = refresh
 
 
 async def _find_unmanaged(db: AsyncSession, report: SeedReport) -> None:

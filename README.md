@@ -62,6 +62,21 @@ alembic/         migrations
 tests/           unit (no database) + integration (real Postgres)
 ```
 
+## Templates
+
+The library lives in `app/data/templates/<category>/<slug>.md` — Markdown with
+YAML frontmatter, seeded by `uv run python -m app.cli seed`. Adding one is a
+file plus a seed run; nothing is registered in code.
+
+Multi-file code starters carry their files as fenced blocks tagged with a path:
+
+    ```python path=app/main.py
+
+The seeder overwrites a changed file without `--refresh`, unlike every other
+seed in this repo (D-43): the file is the source of truth, and there is no
+editorial review loop for a template to undo. View and copy counts are never
+reset.
+
 ## Background work
 
 The worker (`arq`) owns two jobs: building export bundles that are predicted to

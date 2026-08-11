@@ -42,6 +42,7 @@ from app.models.export import (
 )
 from app.models.project import Project, ProjectItem, ProjectItemType
 from app.models.stack import Stack, StackVersion
+from app.models.template import Difficulty, Template, TemplateCategory
 from app.models.tool_run import RunSource, ToolRun
 from app.models.user import Plan, PlanSource, User, UserRole
 
@@ -56,6 +57,7 @@ __all__ = [
     "CatalogFlag",
     "Compatibility",
     "DataSource",
+    "Difficulty",
     "Export",
     "ExportFormat",
     "ExportStatus",
@@ -80,6 +82,8 @@ __all__ = [
     "SourceType",
     "Stack",
     "StackVersion",
+    "Template",
+    "TemplateCategory",
     "TokenPurpose",
     "Tool",
     "ToolCategory",
