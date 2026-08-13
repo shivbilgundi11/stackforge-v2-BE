@@ -68,6 +68,90 @@ def _seed() -> None:
     asyncio.run(run())
 
 
+def _set_plan() -> None:
+    """set-plan <email> <plan> — grant a plan without a checkout.
+
+    The operator path for manual grants (an Enterprise deal, a comp, a
+    support fix) and what the team E2E suite uses to reach the Team tier
+    without a Stripe key. Sets `plan_source` to personal, exactly as a paid
+    personal subscription would.
+    """
+    import asyncio
+
+    if len(sys.argv) < 4:
+        print("usage: python -m app.cli set-plan <email> <free|pro|team|enterprise>")
+        raise SystemExit(2)
+    email, plan_value = sys.argv[2], sys.argv[3]
+
+    async def run() -> None:
+        from sqlalchemy import select
+
+        from app.core.database import SessionLocal
+        from app.models.user import Plan, PlanSource, User
+
+        async with SessionLocal() as session:
+            user = (
+                await session.execute(select(User).where(User.email == email))
+            ).scalar_one_or_none()
+            if user is None:
+                print(f"no user with email {email}")
+                raise SystemExit(1)
+            user.plan = Plan(plan_value)
+            user.plan_source = PlanSource.PERSONAL
+            await session.commit()
+            print(f"{email} -> {plan_value}")
+
+    asyncio.run(run())
+
+
+def _invite_link() -> None:
+    """invite-link <email> — print a fresh accept link for an open invitation.
+
+    The operator answer to "the invite never arrived": rotates the token
+    (the emailed link dies, exactly like a resend) and prints the new URL.
+    Also how the E2E suite reads an invite link without a mailbox.
+    """
+    import asyncio
+    from datetime import timedelta
+
+    if len(sys.argv) < 3:
+        print("usage: python -m app.cli invite-link <email>")
+        raise SystemExit(2)
+    email = sys.argv[2]
+
+    async def run() -> None:
+        from sqlalchemy import select
+
+        from app.core.config import settings
+        from app.core.database import SessionLocal, utcnow
+        from app.models.organization import Invitation
+        from app.services import token_service
+
+        async with SessionLocal() as session:
+            invitation = (
+                await session.execute(
+                    select(Invitation)
+                    .where(
+                        Invitation.email == email,
+                        Invitation.accepted_at.is_(None),
+                        Invitation.revoked_at.is_(None),
+                    )
+                    .order_by(Invitation.created_at.desc())
+                    .limit(1)
+                )
+            ).scalar_one_or_none()
+            if invitation is None:
+                print(f"no open invitation for {email}")
+                raise SystemExit(1)
+            token = token_service.generate_secret()
+            invitation.token_hash = token_service.hash_secret(token)
+            invitation.expires_at = utcnow() + timedelta(days=settings.invite_ttl_days)
+            await session.commit()
+            print(f"{settings.web_base_url}/invite?token={token}")
+
+    asyncio.run(run())
+
+
 def _purge_runs() -> None:
     """Delete unsaved runs past the retention window.
 
@@ -229,6 +313,8 @@ COMMANDS = {
     "generate-keypair": _generate_keypair,
     "openapi": _openapi,
     "seed": _seed,
+    "set-plan": _set_plan,
+    "invite-link": _invite_link,
     "purge-runs": _purge_runs,
     "stripe-sync": _stripe_sync,
 }

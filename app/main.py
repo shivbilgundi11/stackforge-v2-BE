@@ -83,7 +83,17 @@ app.add_middleware(
     allow_origins=settings.cors_origins,
     allow_credentials=True,  # the refresh and anon cookies depend on this
     allow_methods=["GET", "POST", "PATCH", "PUT", "DELETE", "OPTIONS"],
-    allow_headers=["Authorization", "Content-Type", "X-Request-ID", "Idempotency-Key"],
+    # X-Organization-Id is the org switcher's scope header (M21). A custom
+    # header makes every request preflighted, and one missing from this list
+    # fails the preflight — which surfaces as "the whole app went anonymous",
+    # not as a CORS error anywhere useful.
+    allow_headers=[
+        "Authorization",
+        "Content-Type",
+        "X-Request-ID",
+        "Idempotency-Key",
+        "X-Organization-Id",
+    ],
     expose_headers=["X-Request-ID", "X-RateLimit-Remaining", "X-RateLimit-Reset", "Retry-After"],
     max_age=600,
 )
