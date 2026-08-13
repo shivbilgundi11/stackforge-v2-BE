@@ -16,11 +16,13 @@ from app.api.v1 import architect as architect_router
 from app.api.v1 import auth as auth_router
 from app.api.v1 import billing as billing_router
 from app.api.v1 import catalog as catalog_router
+from app.api.v1 import collaboration as collaboration_router
 from app.api.v1 import compare as compare_router
 from app.api.v1 import cost as cost_router
 from app.api.v1 import exports as exports_router
 from app.api.v1 import health as health_router
 from app.api.v1 import infra as infra_router
+from app.api.v1 import organizations as organizations_router
 from app.api.v1 import projects as projects_router
 from app.api.v1 import rag as rag_router
 from app.api.v1 import roi as roi_router
@@ -189,6 +191,11 @@ app.include_router(billing_router.router, prefix="/api/v1/billing")
 # and the public path is deliberately short — it is pasted into chat messages.
 app.include_router(shares_router.router, prefix="/api/v1")
 app.include_router(workspace_router.router, prefix="/api/v1")
+# Owns both /organizations and /invitations — the accept flow's credential is
+# the token, not a membership, so it lives outside the /organizations tree.
+app.include_router(organizations_router.router, prefix="/api/v1")
+# Owns /comments and /approvals — the org is resolved from the resource.
+app.include_router(collaboration_router.router, prefix="/api/v1")
 
 
 @app.get("/", include_in_schema=False)

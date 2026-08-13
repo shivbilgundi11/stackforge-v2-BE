@@ -48,6 +48,17 @@ from app.models.export import (
     ShareLink,
     SourceType,
 )
+from app.models.organization import (
+    Approval,
+    ApprovalStatus,
+    Comment,
+    Invitation,
+    Organization,
+    OrganizationMember,
+    OrgRole,
+    TeamResourceType,
+    Visibility,
+)
 from app.models.project import Project, ProjectItem, ProjectItemType
 from app.models.stack import Stack, StackVersion
 from app.models.template import Difficulty, Template, TemplateCategory
@@ -58,11 +69,14 @@ __all__ = [
     "AiCall",
     "AiOutcome",
     "AnonymousSession",
+    "Approval",
+    "ApprovalStatus",
     "AuthEvent",
     "AuthEventType",
     "AuthOutcome",
     "AuthToken",
     "CatalogFlag",
+    "Comment",
     "Compatibility",
     "DataSource",
     "Difficulty",
@@ -71,12 +85,16 @@ __all__ = [
     "ExportStatus",
     "FlagStatus",
     "GpuPricing",
+    "Invitation",
     "LifecycleStatus",
     "Metric",
     "ModelFamily",
     "ModelPricing",
     "OAuthAccount",
     "OAuthProvider",
+    "OrgRole",
+    "Organization",
+    "OrganizationMember",
     "Plan",
     "PlanQuota",
     "PlanSource",
@@ -95,6 +113,7 @@ __all__ = [
     "StripeEvent",
     "Subscription",
     "SubscriptionStatus",
+    "TeamResourceType",
     "Template",
     "TemplateCategory",
     "TokenPurpose",
@@ -105,4 +124,5 @@ __all__ = [
     "UsageRecord",
     "User",
     "UserRole",
+    "Visibility",
 ]

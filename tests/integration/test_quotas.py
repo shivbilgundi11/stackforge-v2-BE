@@ -308,6 +308,9 @@ async def test_usage_reports_every_visible_meter_for_an_anonymous_caller(
         "projects",
         "saved_stacks",
         "exports_per_month",
+        # Visible since M21 gave seats members to fill. For an anonymous
+        # caller it reads 0 of 0, and the UI hides a zero-limit meter.
+        "seats",
     }
 
 

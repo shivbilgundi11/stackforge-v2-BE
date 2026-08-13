@@ -29,11 +29,13 @@ from sqlalchemy import (
     String,
     Text,
     UniqueConstraint,
+    text,
 )
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.database import Base, TimestampMixin, new_id
+from app.models.organization import Visibility
 
 
 class ProjectItemType(str, enum.Enum):
@@ -49,6 +51,22 @@ class Project(Base, TimestampMixin):
     id: Mapped[str] = mapped_column(String(64), primary_key=True, default=lambda: new_id("prj"))
     user_id: Mapped[str] = mapped_column(
         String(64), ForeignKey("users.id", ondelete="CASCADE"), nullable=False
+    )
+    #: SET NULL on org deletion — the project reverts to private personal work
+    #: rather than vanishing with the organization (M21).
+    organization_id: Mapped[str | None] = mapped_column(
+        String(64), ForeignKey("organizations.id", ondelete="SET NULL")
+    )
+    visibility: Mapped[Visibility] = mapped_column(
+        Enum(
+            Visibility,
+            name="visibility",
+            values_callable=lambda e: [m.value for m in e],
+            create_type=False,
+        ),
+        default=Visibility.PRIVATE,
+        server_default=Visibility.PRIVATE.value,
+        nullable=False,
     )
 
     name: Mapped[str] = mapped_column(String(160), nullable=False)
@@ -70,7 +88,14 @@ class Project(Base, TimestampMixin):
     # `regconfig` literal, which SQLAlchemy cannot render into an index
     # definition — autogenerate raises on it. Declaring it in SQL once is
     # better than an index the model claims to have and no migration creates.
-    __table_args__ = (Index("ix_projects_user_id_updated_at", "user_id", "updated_at"),)
+    __table_args__ = (
+        Index("ix_projects_user_id_updated_at", "user_id", "updated_at"),
+        Index(
+            "ix_projects_organization_id",
+            "organization_id",
+            postgresql_where=text("organization_id IS NOT NULL"),
+        ),
+    )
 
 
 class ProjectItem(Base):

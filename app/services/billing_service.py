@@ -39,17 +39,18 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any, Final
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
 from app.core.database import new_id, utcnow
-from app.core.errors import Conflict, NotFound, PlanRequired, ValidationFailed
+from app.core.errors import Conflict, Forbidden, NotFound, PlanRequired, ValidationFailed
 from app.core.logging import get_logger
 from app.data import plans as plan_data
 from app.integrations import stripe as stripe_integration
 from app.models.billing import StripeEvent, Subscription, SubscriptionStatus
+from app.models.organization import OrgRole
 from app.models.user import Plan, PlanSource, User
 
 logger = get_logger("billing")
@@ -675,8 +676,69 @@ async def _send(message: object) -> None:
 # ── Plan application ────────────────────────────────────────────────────────
 
 
+_PLAN_RANK: Final[dict[Plan, int]] = {
+    Plan.FREE: 0,
+    Plan.PRO: 1,
+    Plan.TEAM: 2,
+    Plan.ENTERPRISE: 3,
+}
+
+
+async def sync_user_plan(db: AsyncSession, user: User) -> None:
+    """Recompute a user's plan from everything that can grant one (M21).
+
+    Two sources: a live personal subscription, and membership of organizations
+    whose plan is paid. The higher tier wins, and `plan_source` records which
+    source granted it — so a personal downgrade cannot erase a team grant, and
+    leaving a team cannot erase a personal subscription.
+    """
+    from app.models.organization import Organization, OrganizationMember
+
+    personal = await get_subscription(db, user)
+    personal_plan = personal.plan if personal is not None and personal.is_paid else Plan.FREE
+
+    org_plan = Plan.FREE
+    granted = (
+        (
+            await db.execute(
+                select(Organization.plan)
+                .join(
+                    OrganizationMember,
+                    OrganizationMember.organization_id == Organization.id,
+                )
+                .where(
+                    OrganizationMember.user_id == user.id,
+                    Organization.deleted_at.is_(None),
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    for candidate in granted:
+        if _PLAN_RANK[candidate] > _PLAN_RANK[org_plan]:
+            org_plan = candidate
+
+    if _PLAN_RANK[org_plan] > _PLAN_RANK[personal_plan]:
+        target, source = org_plan, PlanSource.ORGANIZATION
+    else:
+        target, source = personal_plan, PlanSource.PERSONAL
+
+    if user.plan is not target:
+        logger.info(
+            "billing.plan_changed",
+            user_id=user.id,
+            was=user.plan.value,
+            now=target.value,
+            source=source.value,
+        )
+    user.plan = target
+    user.plan_source = source
+    await db.flush()
+
+
 async def _apply_plan(db: AsyncSession, subscription: Subscription) -> None:
-    """Push the subscription's plan onto the user row.
+    """Push the subscription's plan onto whoever it belongs to.
 
     This is the denormalisation `FeatureService` reads on every request. It is
     written here and nowhere else, so "what changes a user's plan" has exactly
@@ -686,24 +748,139 @@ async def _apply_plan(db: AsyncSession, subscription: Subscription) -> None:
     plan. No project, stack, export, or run is touched, which is what makes a
     downgrade reversible by paying again.
     """
+    if subscription.organization_id is not None:
+        await _apply_org_plan(db, subscription)
+        return
     if subscription.user_id is None:
         return
 
     user = await db.get(User, subscription.user_id)
     if user is None:
         return
+    await sync_user_plan(db, user)
+
+
+async def _apply_org_plan(db: AsyncSession, subscription: Subscription) -> None:
+    """The organization variant: update the org row, then fan the change out
+    to every member — a team downgrade must reach the people it covers."""
+    from app.models.organization import Organization, OrganizationMember
+
+    org = await db.get(Organization, subscription.organization_id)
+    if org is None:
+        return
 
     target = subscription.plan if subscription.is_paid else Plan.FREE
-    if user.plan is not target:
+    if org.plan is not target:
         logger.info(
-            "billing.plan_changed",
-            user_id=user.id,
-            was=user.plan.value,
+            "billing.org_plan_changed",
+            organization_id=org.id,
+            was=org.plan.value,
             now=target.value,
             status=subscription.status.value,
         )
-    user.plan = target
-    user.plan_source = PlanSource.PERSONAL
+    org.plan = target
+    org.seats_purchased = subscription.seats
+    await db.flush()
+
+    members = (
+        (
+            await db.execute(
+                select(User)
+                .join(OrganizationMember, OrganizationMember.user_id == User.id)
+                .where(OrganizationMember.organization_id == org.id)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    for member_user in members:
+        await sync_user_plan(db, member_user)
+
+
+async def change_seats(
+    db: AsyncSession,
+    user: User,
+    *,
+    seats: int,
+    organization_id: str | None = None,
+) -> tuple[int, int]:
+    """Adjust the team's purchased seats, prorated (M21). Owner only.
+
+    Returns `(purchased, used)`. The local rows are updated optimistically and
+    the webhook confirms — same trust model as every other Stripe write.
+    Shrinking below the current membership is refused: removing a member frees
+    a seat, a seat change does not remove members.
+    """
+    from app.models.organization import Organization, OrganizationMember
+    from app.services import organization_service
+
+    if organization_id is not None:
+        org, member = await organization_service.get_membership(
+            db, user=user, organization_id=organization_id
+        )
+        if member.role is not OrgRole.OWNER:
+            raise Forbidden("Only the owner can change seats.")
+    else:
+        found = await db.scalar(
+            select(Organization).where(
+                Organization.owner_id == user.id, Organization.deleted_at.is_(None)
+            )
+        )
+        if found is None:
+            raise NotFound("You do not own an organization.")
+        org = found
+
+    used = int(
+        await db.scalar(
+            select(func.count())
+            .select_from(OrganizationMember)
+            .where(OrganizationMember.organization_id == org.id)
+        )
+        or 0
+    )
+    if seats < used:
+        raise ValidationFailed.on_field(
+            "seats",
+            f"The team has {used} members — remove members before reducing seats.",
+        )
+
+    subscription = await db.scalar(
+        select(Subscription).where(
+            Subscription.organization_id == org.id,
+            Subscription.status != SubscriptionStatus.CANCELED,
+        )
+    )
+    if subscription is None:
+        raise PlanRequired(
+            "Seat billing requires a Team subscription.",
+            details={"required_plan": Plan.TEAM.value},
+        )
+
+    client = stripe_integration.get_client()
+    if client is not None and subscription.stripe_subscription_id:
+        await client.update_subscription_quantity(
+            subscription_id=subscription.stripe_subscription_id, quantity=seats
+        )
+
+    subscription.seats = seats
+    org.seats_purchased = seats
+    await db.flush()
+    logger.info(
+        "billing.seats_changed", organization_id=org.id, seats=seats, used=used
+    )
+    return seats, used
+
+
+async def cancel_org_subscription(db: AsyncSession, subscription: Subscription) -> None:
+    """Cancel at period end — the time is paid for. When Stripe is not
+    configured the local mark is all there is, and that is fine: unconfigured
+    billing means no card was ever charged."""
+    client = stripe_integration.get_client()
+    if client is not None and subscription.stripe_subscription_id:
+        await client.cancel_at_period_end(
+            subscription_id=subscription.stripe_subscription_id, cancel=True
+        )
+    subscription.cancel_at_period_end = True
     await db.flush()
 
 

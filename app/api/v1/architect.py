@@ -18,9 +18,10 @@ from typing import Any
 
 from fastapi import APIRouter
 
-from app.api.deps import Db, RunIdentity
+from app.api.deps import CurrentMembership, Db, RunIdentity
 from app.core.errors import NotFound
 from app.core.responses import Envelope, ok
+from app.models.organization import Organization
 from app.schemas.architect import RecommendIn, ScoreIn
 from app.schemas.tools import Artifact, ToolOutput, ToolRunOut, ToolWarning
 from app.services import (
@@ -53,10 +54,21 @@ def _requirements(payload: RecommendIn) -> Requirements:
 
 @router.post("/recommend", response_model=Envelope[ToolRunOut], name="run_recommend_stack")
 async def run_recommend_stack(
-    db: Db, identity: RunIdentity, payload: RecommendIn
+    db: Db, identity: RunIdentity, member: CurrentMembership, payload: RecommendIn
 ) -> dict[str, Any]:
     requirements = _requirements(payload)
     catalog = await catalog_service.list_tools(db)
+
+    # The organization's approved-tool list, when the caller is acting inside
+    # one (M21). It prefers and flags — `eliminate` never sees it, because a
+    # policy must not silently exclude the best answer.
+    approved: frozenset[str] = frozenset()
+    if member is not None:
+        org = await db.get(Organization, member.organization_id)
+        if org is not None:
+            from app.services import organization_service
+
+            approved = frozenset(organization_service.settings_of(org).approved_tools)
 
     survivors, eliminations = stack_architect_service.eliminate(catalog, requirements)
     candidates = stack_architect_service.assemble(survivors, requirements)
@@ -80,7 +92,10 @@ async def run_recommend_stack(
     compatibilities = {index: result for (index, _), result in zip(scored, resolved, strict=True)}
 
     def compute() -> ToolOutput:
-        ranked = stack_architect_service.rank(candidates, requirements, compatibilities)
+        ranked = stack_architect_service.prefer_approved(
+            stack_architect_service.rank(candidates, requirements, compatibilities),
+            approved,
+        )
         if not ranked:
             return ToolOutput(
                 metrics={"score": 0, "components": 0, "candidates": 0},
@@ -98,7 +113,7 @@ async def run_recommend_stack(
             )
 
         winner = ranked[0]
-        rows = stack_architect_service.component_rows(winner, requirements)
+        rows = stack_architect_service.component_rows(winner, requirements, approved=approved)
         diagram = stack_diagram_service.mermaid(winner.components, requirements)
         summary = stack_architect_service.rule_summary(winner, requirements)
 
@@ -144,7 +159,10 @@ async def run_recommend_stack(
                     ),
                 ),
             ],
-            warnings=stack_architect_service.warnings_for(winner, requirements, eliminations),
+            warnings=(
+                stack_architect_service.warnings_for(winner, requirements, eliminations)
+                + stack_architect_service.approved_flags(winner, approved)
+            ),
             sourced_from=[tool.slug for tool in winner.components],
         )
 

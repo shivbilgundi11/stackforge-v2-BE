@@ -14,7 +14,7 @@ from app.api.deps import (
 )
 from app.core.config import settings
 from app.core.database import utcnow
-from app.core.errors import Unauthenticated
+from app.core.errors import Unauthenticated, ValidationFailed
 from app.core.logging import get_logger
 from app.core.responses import Envelope, ok
 from app.integrations import email as email_integration
@@ -112,12 +112,28 @@ def _tokens_for(user: Any, session_id: str) -> SessionTokens:
     response_description="Always the same shape, whether or not the address existed.",
 )
 async def register(payload: RegisterRequest, db: Db, meta: RequestMeta) -> dict[str, Any]:
+    email_verified = False
+    if payload.invite_token is not None:
+        # Signup-from-invite (M21). The token 404s if dead; a mismatched email
+        # is refused rather than silently registered unverified, because the
+        # invite page locked the field and a mismatch means someone edited the
+        # request.
+        from app.services import organization_service
+
+        invited = await organization_service.invited_email_for(db, token=payload.invite_token)
+        if invited.lower() != payload.email.lower():
+            raise ValidationFailed.on_field(
+                "email", "This invitation was sent to a different email address."
+            )
+        email_verified = True
+
     await auth_service.register(
         db,
         email=payload.email,
         password=payload.password,
         name=payload.name,
         meta=meta,
+        email_verified=email_verified,
     )
     # No branch on the result. A different status or body for an existing
     # address is an enumeration oracle.

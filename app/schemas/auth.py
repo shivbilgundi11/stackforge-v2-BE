@@ -18,6 +18,10 @@ class RegisterRequest(_Base):
     email: EmailStr
     password: str = Field(min_length=12, max_length=256)
     name: str = Field(min_length=1, max_length=120)
+    #: Signup-from-invite (M21). When present, the email must be the invited
+    #: address, and the address is verified implicitly — possession of the
+    #: invite link proves control of the inbox it was sent to.
+    invite_token: str | None = Field(default=None, min_length=16, max_length=256)
 
     @field_validator("name")
     @classmethod

@@ -19,10 +19,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import Identity
 from app.core.database import utcnow
-from app.core.errors import NotFound, ValidationFailed
+from app.core.errors import Forbidden, NotFound, ValidationFailed
 from app.core.logging import get_logger
 from app.models.billing import Metric
 from app.models.export import Export
+from app.models.organization import OrganizationMember
 from app.models.project import Project, ProjectItem, ProjectItemType
 from app.models.stack import Stack
 from app.models.tool_run import ToolRun
@@ -84,6 +85,8 @@ async def create(
     name: str,
     description: str | None = None,
     use_case: str | None = None,
+    visibility: str | None = None,
+    member: OrganizationMember | None = None,
 ) -> Project:
     from app.services import feature_service
 
@@ -92,6 +95,8 @@ async def create(
     await feature_service.consume(db, _identity(user), Metric.PROJECTS)
 
     project = Project(user_id=user.id, name=name, description=description, use_case=use_case)
+    if visibility is not None:
+        scoped.set_visibility(project, visibility, member)
     db.add(project)
     await db.flush()
     await db.refresh(project)
@@ -108,8 +113,27 @@ async def list_for(
     return list((await db.execute(statement)).scalars().all())
 
 
-async def get(db: AsyncSession, project_id: str, user: User) -> Project:
-    return await scoped.get_owned(db, Project, project_id, user, label="project")
+async def list_team(db: AsyncSession, member: OrganizationMember) -> list[Project]:
+    """The acting organization's shared projects (M21)."""
+    statement = (
+        scoped.team_shared(Project, member)
+        .where(Project.archived_at.is_(None))
+        .order_by(Project.updated_at.desc())
+    )
+    return list((await db.execute(statement)).scalars().all())
+
+
+async def get(
+    db: AsyncSession,
+    project_id: str,
+    user: User,
+    member: OrganizationMember | None = None,
+) -> Project:
+    """Read access. Without a membership this is exactly the M17 owner check;
+    with one, the team's shared projects are readable too."""
+    if member is None:
+        return await scoped.get_owned(db, Project, project_id, user, label="project")
+    return await scoped.get_team_readable(db, Project, project_id, user, member, label="project")
 
 
 async def update(
@@ -121,8 +145,10 @@ async def update(
     description: str | None = None,
     use_case: str | None = None,
     archived: bool | None = None,
+    visibility: str | None = None,
+    member: OrganizationMember | None = None,
 ) -> Project:
-    project = await get(db, project_id, user)
+    project = await scoped.get_team_editable(db, Project, project_id, user, member, label="project")
 
     if name is not None:
         project.name = name
@@ -132,6 +158,11 @@ async def update(
         project.use_case = use_case
     if archived is not None:
         project.archived_at = utcnow() if archived else None
+    if visibility is not None:
+        # Only the author moves work in and out of the team.
+        if project.user_id != user.id:
+            raise Forbidden("Only the project's author can change its visibility.")
+        scoped.set_visibility(project, visibility, member)
 
     await db.flush()
     await db.refresh(project)
@@ -229,8 +260,13 @@ async def _assert_owns_item(
         raise NotFound(f"No {item_type.value} with that id.")
 
 
-async def list_items(db: AsyncSession, project_id: str, user: User) -> list[ProjectItem]:
-    await get(db, project_id, user)
+async def list_items(
+    db: AsyncSession,
+    project_id: str,
+    user: User,
+    member: OrganizationMember | None = None,
+) -> list[ProjectItem]:
+    await get(db, project_id, user, member)
     return list(
         (
             await db.execute(

@@ -147,7 +147,13 @@ async def consume_auth_token(db: AsyncSession, *, token: str, purpose: TokenPurp
 
 
 async def register(
-    db: AsyncSession, *, email: str, password: str, name: str, meta: RequestMeta
+    db: AsyncSession,
+    *,
+    email: str,
+    password: str,
+    name: str,
+    meta: RequestMeta,
+    email_verified: bool = False,
 ) -> User | None:
     """Returns the new user, or None when the address already exists.
 
@@ -177,18 +183,24 @@ async def register(
         password_hash=password_service.hash_password(password),
         password_changed_at=utcnow(),
     )
+    if email_verified:
+        # Signup-from-invite (M21): possession of the invite link proves
+        # control of the inbox it was sent to, so a second round trip through
+        # a verification email would verify nothing new.
+        user.email_verified_at = utcnow()
     db.add(user)
     await db.flush()
 
-    token = await issue_auth_token(
-        db,
-        user_id=user.id,
-        purpose=TokenPurpose.EMAIL_VERIFY,
-        ttl=timedelta(hours=settings.email_verify_ttl_hours),
-    )
-    await email_integration.send(
-        email_templates.verify_email(to=user.email, name=user.name, token=token)
-    )
+    if not email_verified:
+        token = await issue_auth_token(
+            db,
+            user_id=user.id,
+            purpose=TokenPurpose.EMAIL_VERIFY,
+            ttl=timedelta(hours=settings.email_verify_ttl_hours),
+        )
+        await email_integration.send(
+            email_templates.verify_email(to=user.email, name=user.name, token=token)
+        )
     await record_event(db, event=AuthEventType.REGISTER, user_id=user.id, meta=meta)
     return user
 

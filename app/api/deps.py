@@ -25,6 +25,7 @@ from app.core.errors import (
 )
 from app.data.plans import Feature
 from app.models.billing import Metric
+from app.models.organization import Organization, OrganizationMember, OrgRole
 from app.models.user import Plan, User, UserRole
 from app.services import auth_service, session_service, token_service
 
@@ -271,3 +272,84 @@ def consume_quota(metric: Metric, amount: int = 1) -> object:
 def current_session_id(request: Request) -> str | None:
     session_id: str | None = getattr(request.state, "session_id", None)
     return session_id
+
+
+# ── Organization scope (M21) ────────────────────────────────────────────────
+
+
+@dataclass(frozen=True)
+class OrgContext:
+    """A caller acting inside an organization they belong to.
+
+    Existence of this object *is* the authorization: it can only be built
+    through membership resolution, which returns the same `NotFound` for
+    another organization's id as for one that does not exist.
+    """
+
+    org: Organization
+    member: OrganizationMember
+    user: User
+
+    @property
+    def role(self) -> OrgRole:
+        return self.member.role
+
+
+def require_org_role(minimum: OrgRole) -> object:
+    """Org-role gate.
+
+    Same doctrine as every other gate: a dependency, never an `if` in a route
+    body. A non-member gets 404 (cross-org isolation — a 403 would confirm the
+    org exists); a member below `minimum` gets 403, because they already know
+    the org exists.
+
+    The route must declare an `organization_id` path parameter.
+    """
+
+    async def dependency(organization_id: str, user: CurrentUser, db: Db) -> OrgContext:
+        from app.services import organization_service
+
+        org, member = await organization_service.get_membership(
+            db, user=user, organization_id=organization_id
+        )
+        if not member.role.covers(minimum):
+            raise Forbidden("Your role in this organization does not allow that.")
+        bind(organization_id=org.id)
+        return OrgContext(org=org, member=member, user=user)
+
+    return Depends(dependency)
+
+
+ORG_ID_HEADER = "X-Organization-Id"
+
+
+async def get_current_membership(
+    request: Request, user: OptionalUser, db: Db
+) -> OrganizationMember | None:
+    """The org switcher's scope, from the `X-Organization-Id` header.
+
+    `None` — no header or no user — means personal scope, which is every
+    request made before M21 existed. A header naming an org the caller is not
+    a member of is the same 404 as one that does not exist.
+    """
+    organization_id = request.headers.get(ORG_ID_HEADER)
+    if not organization_id or user is None:
+        return None
+
+    from app.services import organization_service
+
+    org, member = await organization_service.get_membership(
+        db, user=user, organization_id=organization_id
+    )
+    bind(organization_id=org.id)
+    return member
+
+
+CurrentMembership = Annotated[OrganizationMember | None, Depends(get_current_membership)]
+
+#: The four gates, pre-built. A route takes the weakest one that suffices —
+#: the names mirror the role matrix in `04-Authentication-Design`.
+OrgViewer = Annotated[OrgContext, require_org_role(OrgRole.VIEWER)]
+OrgEditor = Annotated[OrgContext, require_org_role(OrgRole.MEMBER)]
+OrgAdmin = Annotated[OrgContext, require_org_role(OrgRole.ADMIN)]
+OrgOwner = Annotated[OrgContext, require_org_role(OrgRole.OWNER)]

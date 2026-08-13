@@ -58,6 +58,7 @@ class Settings(BaseSettings):
     refresh_token_absolute_ttl_days: int = 90
     email_verify_ttl_hours: int = 24
     password_reset_ttl_minutes: int = 30
+    invite_ttl_days: int = 7
 
     refresh_cookie_name: str = "__sf_rt"
     anon_cookie_name: str = "__sf_anon"

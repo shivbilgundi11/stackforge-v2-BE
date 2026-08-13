@@ -14,6 +14,9 @@ class ProjectIn(BaseModel):
     name: str = Field(min_length=1, max_length=160)
     description: str | None = Field(default=None, max_length=2000)
     use_case: str | None = Field(default=None, max_length=60)
+    #: `team` requires acting inside an organization (M21). Absent means
+    #: private — personal work never becomes team work by default.
+    visibility: Literal["private", "team", "public"] | None = None
 
 
 class ProjectPatch(BaseModel):
@@ -21,6 +24,7 @@ class ProjectPatch(BaseModel):
     description: str | None = Field(default=None, max_length=2000)
     use_case: str | None = Field(default=None, max_length=60)
     archived: bool | None = None
+    visibility: Literal["private", "team", "public"] | None = None
 
 
 class ProjectOut(BaseModel):
@@ -30,6 +34,10 @@ class ProjectOut(BaseModel):
     use_case: str | None
     session_state: dict[str, Any]
     item_count: int = 0
+    visibility: str = "private"
+    organization_id: str | None = None
+    is_yours: bool = True
+    owner_name: str | None = None
     archived_at: datetime | None
     created_at: datetime
     updated_at: datetime

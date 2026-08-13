@@ -19,17 +19,20 @@ from typing import Any
 
 from sqlalchemy import (
     DateTime,
+    Enum,
     ForeignKey,
     Index,
     Integer,
     String,
     Text,
     UniqueConstraint,
+    text,
 )
 from sqlalchemy.dialects.postgresql import ARRAY, JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.database import Base, TimestampMixin, new_id
+from app.models.organization import Visibility
 
 
 class Stack(Base, TimestampMixin):
@@ -38,6 +41,17 @@ class Stack(Base, TimestampMixin):
     id: Mapped[str] = mapped_column(String(64), primary_key=True, default=lambda: new_id("stk"))
     user_id: Mapped[str] = mapped_column(
         String(64), ForeignKey("users.id", ondelete="CASCADE"), nullable=False
+    )
+    #: SET NULL on org deletion — the stack reverts to private personal work
+    #: rather than vanishing with the organization (M21).
+    organization_id: Mapped[str | None] = mapped_column(
+        String(64), ForeignKey("organizations.id", ondelete="SET NULL")
+    )
+    visibility: Mapped[Visibility] = mapped_column(
+        Enum(Visibility, name="visibility", values_callable=lambda e: [m.value for m in e]),
+        default=Visibility.PRIVATE,
+        server_default=Visibility.PRIVATE.value,
+        nullable=False,
     )
     name: Mapped[str] = mapped_column(String(160), nullable=False)
     description: Mapped[str | None] = mapped_column(Text)
@@ -59,6 +73,11 @@ class Stack(Base, TimestampMixin):
     __table_args__ = (
         Index("ix_stacks_user_id_updated_at", "user_id", "updated_at"),
         Index("ix_stacks_component_slugs", "component_slugs", postgresql_using="gin"),
+        Index(
+            "ix_stacks_organization_id",
+            "organization_id",
+            postgresql_where=text("organization_id IS NOT NULL"),
+        ),
     )
 
 

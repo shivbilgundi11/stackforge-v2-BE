@@ -295,12 +295,21 @@ def rank(
     ]
 
 
-def component_rows(candidate: Candidate, requirements: Requirements) -> list[dict[str, Any]]:
+def component_rows(
+    candidate: Candidate,
+    requirements: Requirements,
+    *,
+    approved: frozenset[str] = frozenset(),
+) -> list[dict[str, Any]]:
     """One row per role, with the graveyard status on the row itself.
 
     On the row rather than in a footnote: a stack that silently recommends a
     dead tool destroys the trust the whole product runs on, and a footnote is
     where warnings go to be unread (FR-20).
+
+    When an organization's approved-tool list is in force, each row also says
+    whether the tool is on it — the badge the UI shows next to unapproved
+    picks (M21).
     """
     by_category = {tool.category: tool for tool in candidate.components}
     rows: list[dict[str, Any]] = []
@@ -309,22 +318,72 @@ def component_rows(candidate: Candidate, requirements: Requirements) -> list[dic
         tool = by_category.get(_role_category(role, requirements))
         if tool is None:
             continue
-        rows.append(
-            {
-                "role": role.label,
-                "role_key": role.key,
-                "slug": tool.slug,
-                "name": tool.name,
-                "status": tool.status,
-                "status_reason": tool.status_reason or "",
-                "alternatives": ", ".join(tool.alternatives),
-                "why": _why(tool, role, requirements),
-                "self_hostable": "yes" if tool.self_hostable else "no",
-                "pricing_model": tool.pricing_model or "—",
-                "docs_url": tool.docs_url or "",
-            }
-        )
+        row = {
+            "role": role.label,
+            "role_key": role.key,
+            "slug": tool.slug,
+            "name": tool.name,
+            "status": tool.status,
+            "status_reason": tool.status_reason or "",
+            "alternatives": ", ".join(tool.alternatives),
+            "why": _why(tool, role, requirements),
+            "self_hostable": "yes" if tool.self_hostable else "no",
+            "pricing_model": tool.pricing_model or "—",
+            "docs_url": tool.docs_url or "",
+        }
+        if approved:
+            row["approved"] = "yes" if tool.slug in approved else "no"
+        rows.append(row)
     return rows
+
+
+def prefer_approved(
+    ranked: list[Candidate], approved: frozenset[str], *, margin: int = 5
+) -> list[Candidate]:
+    """Approved-tool preference (M21).
+
+    Among candidates within `margin` points of the leader, fewer unapproved
+    components wins; the sort is stable, so score order survives inside each
+    tier. A clearly better unapproved stack still wins — policy prefers,
+    quality decides, and the flags say the rest.
+    """
+    if not approved or not ranked:
+        return ranked
+
+    def unapproved(candidate: Candidate) -> int:
+        return sum(1 for tool in candidate.components if tool.slug not in approved)
+
+    top = ranked[0].score.total
+    near = [candidate for candidate in ranked if top - candidate.score.total <= margin]
+    far = [candidate for candidate in ranked if top - candidate.score.total > margin]
+    near.sort(key=unapproved)
+    return [
+        candidate._replace(rank=position)
+        for position, candidate in enumerate(near + far, 1)
+    ]
+
+
+def approved_flags(candidate: Candidate, approved: frozenset[str]) -> list[ToolWarning]:
+    """Flag, never exclude (M21).
+
+    A recommendation that quietly omits the best option because of a policy
+    the user cannot see is worse than one that shows it with a badge and lets
+    a human decide.
+    """
+    if not approved:
+        return []
+    return [
+        ToolWarning(
+            level="warning",
+            message=(
+                f"{tool.name} is not on your organization's approved tool list. "
+                "It is shown because it best fits your requirements — confirm "
+                "with your team before adopting it."
+            ),
+        )
+        for tool in candidate.components
+        if tool.slug not in approved
+    ]
 
 
 def _why(tool: ToolOut, role: Role, requirements: Requirements) -> str:

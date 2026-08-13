@@ -60,6 +60,10 @@ class StripeClient(Protocol):
 
     async def cancel_at_period_end(self, *, subscription_id: str, cancel: bool) -> None: ...
 
+    async def update_subscription_quantity(
+        self, *, subscription_id: str, quantity: int
+    ) -> None: ...
+
 
 class LiveStripe:
     """The real thing.
@@ -178,6 +182,22 @@ class LiveStripe:
             )
         except stripe.StripeError as exc:
             raise _upstream("subscription update", exc) from exc
+
+    async def update_subscription_quantity(self, *, subscription_id: str, quantity: int) -> None:
+        """Seat change (M21). Prorated: the invoice shows the partial-period
+        charge or credit rather than the change waiting for renewal."""
+        try:
+            subscription = await self._client.v1.subscriptions.retrieve_async(subscription_id)
+            item_id = subscription["items"]["data"][0]["id"]
+            await self._client.v1.subscriptions.update_async(
+                subscription_id,
+                params={
+                    "items": [{"id": item_id, "quantity": quantity}],
+                    "proration_behavior": "create_prorations",
+                },
+            )
+        except stripe.StripeError as exc:
+            raise _upstream("seat update", exc) from exc
 
 
 def _upstream(action: str, exc: stripe.StripeError) -> UpstreamError:

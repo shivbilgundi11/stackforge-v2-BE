@@ -114,8 +114,9 @@ class Subscription(Base, TimestampMixin):
     user_id: Mapped[str | None] = mapped_column(
         String(64), ForeignKey("users.id", ondelete="CASCADE")
     )
-    #: FK deliberately absent until M21 creates `organizations`.
-    organization_id: Mapped[str | None] = mapped_column(String(64))
+    organization_id: Mapped[str | None] = mapped_column(
+        String(64), ForeignKey("organizations.id", ondelete="CASCADE")
+    )
 
     #: The Stripe customer outlives any single subscription — a user who
     #: cancels and resubscribes six months later must land on the same customer
@@ -166,6 +167,13 @@ class Subscription(Base, TimestampMixin):
             "user_id",
             unique=True,
             postgresql_where=text("user_id IS NOT NULL AND status <> 'canceled'"),
+        ),
+        # The same invariant for the other owner type (M21).
+        Index(
+            "uq_subscriptions_organization_live",
+            "organization_id",
+            unique=True,
+            postgresql_where=text("organization_id IS NOT NULL AND status <> 'canceled'"),
         ),
         Index("ix_subscriptions_stripe_customer_id", "stripe_customer_id"),
         Index(

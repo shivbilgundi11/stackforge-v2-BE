@@ -19,12 +19,14 @@ from fastapi import APIRouter, Query
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.deps import CurrentUser, Db
+from app.api.deps import CurrentMembership, CurrentUser, Db
 from app.core.database import utcnow
-from app.core.errors import NotFound, ValidationFailed
+from app.core.errors import Forbidden, NotFound, ValidationFailed
 from app.core.responses import Envelope, ok
+from app.models.organization import OrganizationMember
 from app.models.stack import Stack, StackVersion
 from app.models.user import User
+from app.repositories import scoped
 from app.schemas.architect import (
     StackDiffOut,
     StackIn,
@@ -67,7 +69,7 @@ async def _score_of(db: AsyncSession, slugs: list[str], requirements: dict[str, 
     ).total
 
 
-async def _out(db: AsyncSession, stack: Stack) -> StackOut:
+async def _out(db: AsyncSession, stack: Stack, user: User) -> StackOut:
     catalog = await catalog_service.list_tools(db)
     by_slug = {tool.slug: tool for tool in catalog}
     deprecated = [
@@ -75,6 +77,11 @@ async def _out(db: AsyncSession, stack: Stack) -> StackOut:
         for slug in stack.component_slugs
         if slug in by_slug and by_slug[slug].status not in stack_architect_service.RECOMMENDABLE
     ]
+
+    owner_name: str | None = user.name
+    if stack.user_id != user.id:
+        owner = await db.get(User, stack.user_id)
+        owner_name = owner.name if owner else None
 
     return StackOut(
         id=stack.id,
@@ -85,18 +92,30 @@ async def _out(db: AsyncSession, stack: Stack) -> StackOut:
         current_version=stack.current_version,
         score=str(await _score_of(db, list(stack.component_slugs), stack.requirements)),
         deprecated_components=deprecated,
+        visibility=stack.visibility.value,
+        organization_id=stack.organization_id,
+        is_yours=stack.user_id == user.id,
+        owner_name=owner_name,
         created_at=stack.created_at,
         updated_at=stack.updated_at,
     )
 
 
-async def _owned(db: AsyncSession, stack_id: str, user: User) -> Stack:
-    stack = await db.get(Stack, stack_id)
-    if stack is None or stack.user_id != user.id:
-        # Same response either way. Distinguishing "not yours" from "does not
-        # exist" tells an attacker which ids are real.
-        raise NotFound("No stack with that id.")
-    return stack
+async def _readable(
+    db: AsyncSession, stack_id: str, user: User, member: OrganizationMember | None
+) -> Stack:
+    """Own rows, plus the team's shared rows when acting inside an org (M21).
+    Not-visible and does-not-exist are the same 404."""
+    return await scoped.get_team_readable(db, Stack, stack_id, user, member, label="stack")
+
+
+async def _editable(
+    db: AsyncSession, stack_id: str, user: User, member: OrganizationMember | None
+) -> Stack:
+    return await scoped.get_team_editable(db, Stack, stack_id, user, member, label="stack")
+
+
+_apply_visibility = scoped.set_visibility
 
 
 def _snapshot(stack: Stack, *, version: int, summary: str | None, at: datetime) -> StackVersion:
@@ -112,7 +131,9 @@ def _snapshot(stack: Stack, *, version: int, summary: str | None, at: datetime) 
 
 
 @router.post("", response_model=Envelope[StackOut], name="create_stack", status_code=201)
-async def create_stack(db: Db, user: CurrentUser, payload: StackIn) -> dict[str, Any]:
+async def create_stack(
+    db: Db, user: CurrentUser, member: CurrentMembership, payload: StackIn
+) -> dict[str, Any]:
     now = utcnow()
     stack = Stack(
         user_id=user.id,
@@ -123,6 +144,8 @@ async def create_stack(db: Db, user: CurrentUser, payload: StackIn) -> dict[str,
         current_version=1,
         source_run_id=payload.source_run_id,
     )
+    if payload.visibility is not None:
+        _apply_visibility(stack, payload.visibility, member)
     db.add(stack)
     await db.flush()
 
@@ -133,36 +156,47 @@ async def create_stack(db: Db, user: CurrentUser, payload: StackIn) -> dict[str,
     # access — and that is not allowed outside a greenlet on the async driver.
     await db.refresh(stack)
 
-    return ok(await _out(db, stack))
+    return ok(await _out(db, stack, user))
 
 
 @router.get("", response_model=Envelope[list[StackOut]], name="list_stacks")
 async def list_stacks(
-    db: Db, user: CurrentUser, limit: int = Query(default=50, ge=1, le=100)
+    db: Db,
+    user: CurrentUser,
+    member: CurrentMembership,
+    scope: str = Query(default="mine", pattern="^(mine|team)$"),
+    limit: int = Query(default=50, ge=1, le=100),
 ) -> dict[str, Any]:
+    """`scope=team` lists the acting organization's shared stacks.
+
+    Without an organization header the team is empty rather than an error —
+    the same request every personal caller has been making since M15.
+    """
+    if scope == "team":
+        if member is None:
+            return ok([])
+        statement = scoped.team_shared(Stack, member)
+    else:
+        statement = scoped.owned_by(Stack, user)
+
     rows = (
-        (
-            await db.execute(
-                select(Stack)
-                .where(Stack.user_id == user.id)
-                .order_by(Stack.updated_at.desc())
-                .limit(limit)
-            )
-        )
+        (await db.execute(statement.order_by(Stack.updated_at.desc()).limit(limit)))
         .scalars()
         .all()
     )
-    return ok([await _out(db, stack) for stack in rows])
+    return ok([await _out(db, stack, user) for stack in rows])
 
 
 @router.get("/{stack_id}", response_model=Envelope[StackOut], name="get_stack")
-async def get_stack(db: Db, user: CurrentUser, stack_id: str) -> dict[str, Any]:
-    return ok(await _out(db, await _owned(db, stack_id, user)))
+async def get_stack(
+    db: Db, user: CurrentUser, member: CurrentMembership, stack_id: str
+) -> dict[str, Any]:
+    return ok(await _out(db, await _readable(db, stack_id, user, member), user))
 
 
 @router.patch("/{stack_id}", response_model=Envelope[StackOut], name="update_stack")
 async def update_stack(
-    db: Db, user: CurrentUser, stack_id: str, payload: StackPatch
+    db: Db, user: CurrentUser, member: CurrentMembership, stack_id: str, payload: StackPatch
 ) -> dict[str, Any]:
     """Every save creates a version.
 
@@ -170,7 +204,7 @@ async def update_stack(
     view is the record of what happened to a stack and a rename that leaves no
     trace makes the history lie by omission.
     """
-    stack = await _owned(db, stack_id, user)
+    stack = await _editable(db, stack_id, user, member)
 
     if payload.name is not None:
         stack.name = payload.name
@@ -180,6 +214,13 @@ async def update_stack(
         stack.component_slugs = payload.component_slugs
     if payload.requirements is not None:
         stack.requirements = payload.requirements
+    if payload.visibility is not None:
+        # Only the author moves work in and out of the team. A teammate
+        # editing components is collaboration; a teammate flipping someone
+        # else's work private-or-public is not.
+        if stack.user_id != user.id:
+            raise Forbidden("Only the stack's author can change its visibility.")
+        _apply_visibility(stack, payload.visibility, member)
 
     stack.current_version += 1
     db.add(
@@ -193,12 +234,14 @@ async def update_stack(
     await db.flush()
     await db.refresh(stack)
 
-    return ok(await _out(db, stack))
+    return ok(await _out(db, stack, user))
 
 
 @router.delete("/{stack_id}", status_code=204, name="delete_stack")
 async def delete_stack(db: Db, user: CurrentUser, stack_id: str) -> None:
-    stack = await _owned(db, stack_id, user)
+    # Author-only, deliberately tighter than edit: a teammate can improve
+    # shared work but not destroy it.
+    stack = await scoped.get_owned(db, Stack, stack_id, user, label="stack")
     await db.delete(stack)
     await db.flush()
 
@@ -209,13 +252,17 @@ async def delete_stack(db: Db, user: CurrentUser, stack_id: str) -> None:
     name="clone_stack",
     status_code=201,
 )
-async def clone_stack(db: Db, user: CurrentUser, stack_id: str) -> dict[str, Any]:
+async def clone_stack(
+    db: Db, user: CurrentUser, member: CurrentMembership, stack_id: str
+) -> dict[str, Any]:
     """A clone starts its own history at v1.
 
     Carrying the source's version numbers over would make two stacks claim the
-    same v3 and mean different things by it.
+    same v3 and mean different things by it. A teammate's shared stack can be
+    cloned — the clone is private personal work, which is the supported way to
+    build on shared work without editing it.
     """
-    source = await _owned(db, stack_id, user)
+    source = await _readable(db, stack_id, user, member)
     now = utcnow()
 
     clone = Stack(
@@ -234,7 +281,7 @@ async def clone_stack(db: Db, user: CurrentUser, stack_id: str) -> dict[str, Any
     await db.flush()
     await db.refresh(clone)
 
-    return ok(await _out(db, clone))
+    return ok(await _out(db, clone, user))
 
 
 @router.get(
@@ -242,8 +289,10 @@ async def clone_stack(db: Db, user: CurrentUser, stack_id: str) -> dict[str, Any
     response_model=Envelope[list[StackVersionOut]],
     name="list_stack_versions",
 )
-async def list_stack_versions(db: Db, user: CurrentUser, stack_id: str) -> dict[str, Any]:
-    await _owned(db, stack_id, user)
+async def list_stack_versions(
+    db: Db, user: CurrentUser, member: CurrentMembership, stack_id: str
+) -> dict[str, Any]:
+    await _readable(db, stack_id, user, member)
     rows = (
         (
             await db.execute(
@@ -264,9 +313,9 @@ async def list_stack_versions(db: Db, user: CurrentUser, stack_id: str) -> dict[
     name="get_stack_version",
 )
 async def get_stack_version(
-    db: Db, user: CurrentUser, stack_id: str, version: int
+    db: Db, user: CurrentUser, member: CurrentMembership, stack_id: str, version: int
 ) -> dict[str, Any]:
-    await _owned(db, stack_id, user)
+    await _readable(db, stack_id, user, member)
     row = await _version(db, stack_id, version)
     return ok(StackVersionOut.model_validate(row, from_attributes=True))
 
@@ -288,6 +337,7 @@ async def _version(db: AsyncSession, stack_id: str, version: int) -> StackVersio
 async def diff_stack_versions(
     db: Db,
     user: CurrentUser,
+    member: CurrentMembership,
     stack_id: str,
     from_version: int = Query(alias="from", ge=1),
     to_version: int = Query(alias="to", ge=1),
@@ -298,7 +348,7 @@ async def diff_stack_versions(
     at v1 against a fresh v2 score would blame the user's edit for a month of
     catalog drift.
     """
-    await _owned(db, stack_id, user)
+    await _readable(db, stack_id, user, member)
     if from_version == to_version:
         raise ValidationFailed.on_field("to", "Pick two different versions to compare.")
 

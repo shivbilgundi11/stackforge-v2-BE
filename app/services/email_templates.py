@@ -156,6 +156,55 @@ def registration_attempt(*, to: str) -> Email:
     )
 
 
+# ── Teams (M21) ─────────────────────────────────────────────────────────────
+
+
+def organization_invite(
+    *, to: str, org_name: str, inviter_name: str, role: str, token: str
+) -> Email:
+    url = f"{settings.web_base_url}/invite?token={token}"
+    days = settings.invite_ttl_days
+    return Email(
+        to=to,
+        subject=f"{inviter_name} invited you to {org_name} on {BRAND}",
+        text=(
+            f"Hi,\n\n"
+            f"{inviter_name} invited you to join {org_name} on {BRAND} "
+            f"as a {role}.\n\n"
+            f"Accept the invitation:\n\n{url}\n\n"
+            f"This invitation expires in {days} days. If you do not have a "
+            f"{BRAND} account yet, you can create one from the same link.\n"
+        ),
+        html=_wrap(
+            f"Join {org_name} on {BRAND}",
+            f"<p>{inviter_name} invited you to join <strong>{org_name}</strong> "
+            f"as a {role}. The invitation expires in {days} days. If you do not "
+            "have an account yet, you can create one from the same link.</p>",
+            ("Accept invitation", url),
+        ),
+    )
+
+
+def comment_mention(
+    *, to: str, name: str, author_name: str, org_name: str, resource_label: str, url: str
+) -> Email:
+    return Email(
+        to=to,
+        subject=f"{author_name} mentioned you in {org_name}",
+        text=(
+            f"Hi {name},\n\n"
+            f"{author_name} mentioned you in a comment on {resource_label} "
+            f"in {org_name}:\n\n{url}\n"
+        ),
+        html=_wrap(
+            f"{author_name} mentioned you",
+            f"<p>{author_name} mentioned you in a comment on {resource_label} "
+            f"in <strong>{org_name}</strong>.</p>",
+            ("View comment", url),
+        ),
+    )
+
+
 # ── Billing (M20) ───────────────────────────────────────────────────────────
 
 BILLING_URL = f"{settings.web_base_url}/settings/billing"

@@ -50,6 +50,10 @@ class StackIn(BaseModel):
     component_slugs: list[str] = Field(min_length=1, max_length=15)
     requirements: dict[str, Any] = Field(default_factory=dict)
     source_run_id: str | None = Field(default=None, max_length=64)
+    #: `team` requires acting inside an organization (the `X-Organization-Id`
+    #: header). Absent means private — personal work never becomes team work
+    #: by default (M21).
+    visibility: Literal["private", "team", "public"] | None = None
 
 
 class StackPatch(BaseModel):
@@ -57,6 +61,7 @@ class StackPatch(BaseModel):
     description: str | None = Field(default=None, max_length=2000)
     component_slugs: list[str] | None = Field(default=None, min_length=1, max_length=15)
     requirements: dict[str, Any] | None = None
+    visibility: Literal["private", "team", "public"] | None = None
     #: What changed and why. Written to the version row, because a version
     #: history of "updated" entries is a list nobody reads.
     change_summary: str | None = Field(default=None, max_length=500)
@@ -73,6 +78,12 @@ class StackOut(BaseModel):
     #: what makes the deprecation flag below meaningful.
     score: str
     deprecated_components: list[str]
+    visibility: str
+    organization_id: str | None
+    #: Whether the caller authored it — a team listing mixes their rows with
+    #: teammates', and the UI gates edit affordances on this.
+    is_yours: bool
+    owner_name: str | None
     created_at: datetime
     updated_at: datetime
 

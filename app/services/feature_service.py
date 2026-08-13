@@ -47,7 +47,7 @@ from datetime import UTC, date, datetime, timedelta
 from typing import Final
 
 from redis.exceptions import RedisError
-from sqlalchemy import func, select
+from sqlalchemy import Integer, func, select
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -323,10 +323,35 @@ async def _level_used(db: AsyncSession, identity: Identity, metric: Metric) -> i
         case Metric.SAVED_STACKS:
             stmt = select(func.count()).select_from(Stack).where(Stack.user_id == identity.user.id)
         case Metric.SEATS:
-            # Seats are bought, not counted from rows — M21 fills this in with
-            # a membership count. Until then a Team plan's seat allowance is
-            # whatever it purchased and nothing consumes it.
-            return 0
+            # The membership count of the organization the user acts for:
+            # the one they own, else the first they belong to. A user in no
+            # organization consumes no seats (M21).
+            from app.models.organization import Organization, OrganizationMember
+
+            org_id = await db.scalar(
+                select(Organization.id)
+                .join(
+                    OrganizationMember,
+                    OrganizationMember.organization_id == Organization.id,
+                )
+                .where(
+                    OrganizationMember.user_id == identity.user.id,
+                    Organization.deleted_at.is_(None),
+                )
+                .order_by(
+                    # Owned orgs first, then oldest membership.
+                    (Organization.owner_id != identity.user.id).cast(Integer),
+                    OrganizationMember.created_at,
+                )
+                .limit(1)
+            )
+            if org_id is None:
+                return 0
+            stmt = (
+                select(func.count())
+                .select_from(OrganizationMember)
+                .where(OrganizationMember.organization_id == org_id)
+            )
         case _:  # pragma: no cover — a rate metric reaching here is a bug
             return 0
 

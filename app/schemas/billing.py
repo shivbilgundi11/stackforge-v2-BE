@@ -107,6 +107,18 @@ class CancellationIn(BaseModel):
     cancel: bool = True
 
 
+class SeatChangeIn(BaseModel):
+    seats: int = Field(ge=1, le=500)
+    #: Which organization, when the caller belongs to more than one. Omitted
+    #: means the one they own.
+    organization_id: str | None = Field(default=None, max_length=64)
+
+
+class SeatChangeOut(BaseModel):
+    seats: int
+    used: int
+
+
 class WebhookOut(BaseModel):
     """Deliberately uninformative to the caller.
 

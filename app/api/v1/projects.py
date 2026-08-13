@@ -13,13 +13,14 @@ from fastapi import APIRouter, Query
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.deps import CurrentUser, Db
+from app.api.deps import CurrentMembership, CurrentUser, Db
 from app.core.database import utcnow
 from app.core.responses import Envelope, ok
 from app.models.export import Export
 from app.models.project import Project, ProjectItem, ProjectItemType
 from app.models.stack import Stack
 from app.models.tool_run import ToolRun
+from app.models.user import User
 from app.schemas.workspace import (
     CarriedSessionOut,
     CarriedSessionPatch,
@@ -36,7 +37,7 @@ from app.services import project_service
 router = APIRouter(tags=["projects"])
 
 
-async def _out(db: AsyncSession, project: Project) -> ProjectOut:
+async def _out(db: AsyncSession, project: Project, user: User) -> ProjectOut:
     count = int(
         await db.scalar(
             select(func.count())
@@ -45,6 +46,10 @@ async def _out(db: AsyncSession, project: Project) -> ProjectOut:
         )
         or 0
     )
+    owner_name: str | None = user.name
+    if project.user_id != user.id:
+        owner = await db.get(User, project.user_id)
+        owner_name = owner.name if owner else None
     return ProjectOut(
         id=project.id,
         name=project.name,
@@ -52,6 +57,10 @@ async def _out(db: AsyncSession, project: Project) -> ProjectOut:
         use_case=project.use_case,
         session_state=project.session_state,
         item_count=count,
+        visibility=project.visibility.value,
+        organization_id=project.organization_id,
+        is_yours=project.user_id == user.id,
+        owner_name=owner_name,
         archived_at=project.archived_at,
         created_at=project.created_at,
         updated_at=project.updated_at,
@@ -59,33 +68,46 @@ async def _out(db: AsyncSession, project: Project) -> ProjectOut:
 
 
 @router.post("", response_model=Envelope[ProjectOut], name="create_project", status_code=201)
-async def create_project(db: Db, user: CurrentUser, payload: ProjectIn) -> dict[str, Any]:
+async def create_project(
+    db: Db, user: CurrentUser, member: CurrentMembership, payload: ProjectIn
+) -> dict[str, Any]:
     project = await project_service.create(
         db,
         user,
         name=payload.name,
         description=payload.description,
         use_case=payload.use_case,
+        visibility=payload.visibility,
+        member=member,
     )
-    return ok(await _out(db, project))
+    return ok(await _out(db, project, user))
 
 
 @router.get("", response_model=Envelope[list[ProjectOut]], name="list_projects")
 async def list_projects(
-    db: Db, user: CurrentUser, include_archived: bool = Query(default=False)
+    db: Db,
+    user: CurrentUser,
+    member: CurrentMembership,
+    include_archived: bool = Query(default=False),
+    scope: str = Query(default="mine", pattern="^(mine|team)$"),
 ) -> dict[str, Any]:
-    projects = await project_service.list_for(db, user, include_archived=include_archived)
-    return ok([await _out(db, project) for project in projects])
+    if scope == "team":
+        projects = [] if member is None else await project_service.list_team(db, member)
+    else:
+        projects = await project_service.list_for(db, user, include_archived=include_archived)
+    return ok([await _out(db, project, user) for project in projects])
 
 
 @router.get("/{project_id}", response_model=Envelope[ProjectOut], name="get_project")
-async def get_project(db: Db, user: CurrentUser, project_id: str) -> dict[str, Any]:
-    return ok(await _out(db, await project_service.get(db, project_id, user)))
+async def get_project(
+    db: Db, user: CurrentUser, member: CurrentMembership, project_id: str
+) -> dict[str, Any]:
+    return ok(await _out(db, await project_service.get(db, project_id, user, member), user))
 
 
 @router.patch("/{project_id}", response_model=Envelope[ProjectOut], name="update_project")
 async def update_project(
-    db: Db, user: CurrentUser, project_id: str, payload: ProjectPatch
+    db: Db, user: CurrentUser, member: CurrentMembership, project_id: str, payload: ProjectPatch
 ) -> dict[str, Any]:
     project = await project_service.update(
         db,
@@ -95,8 +117,10 @@ async def update_project(
         description=payload.description,
         use_case=payload.use_case,
         archived=payload.archived,
+        visibility=payload.visibility,
+        member=member,
     )
-    return ok(await _out(db, project))
+    return ok(await _out(db, project, user))
 
 
 @router.delete("/{project_id}", status_code=204, name="delete_project")
@@ -158,8 +182,10 @@ async def _resolve(db: AsyncSession, item: ProjectItem) -> ProjectItemOut:
 @router.get(
     "/{project_id}/items", response_model=Envelope[list[ProjectItemOut]], name="list_project_items"
 )
-async def list_project_items(db: Db, user: CurrentUser, project_id: str) -> dict[str, Any]:
-    items = await project_service.list_items(db, project_id, user)
+async def list_project_items(
+    db: Db, user: CurrentUser, member: CurrentMembership, project_id: str
+) -> dict[str, Any]:
+    items = await project_service.list_items(db, project_id, user, member)
     return ok([await _resolve(db, item) for item in items])
 
 

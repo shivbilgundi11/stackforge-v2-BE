@@ -33,6 +33,8 @@ from app.schemas.billing import (
     PlanLimitOut,
     PortalOut,
     PricingPlanOut,
+    SeatChangeIn,
+    SeatChangeOut,
     SubscriptionOut,
     UsageSummaryOut,
     WebhookOut,
@@ -54,14 +56,15 @@ METRIC_LABELS: dict[Metric, str] = {
     Metric.SEATS: "Seats",
 }
 
-#: Which meters a person is shown. Seats are meaningless until M21 gives them
-#: members to fill, and a meter permanently reading "0 of 5" reads as broken.
+#: Which meters a person is shown. Seats joined the list with M21 — the
+#: membership count now consumes them.
 VISIBLE_METRICS = (
     Metric.TOOL_RUNS_PER_DAY,
     Metric.AI_CALLS_PER_DAY,
     Metric.PROJECTS,
     Metric.SAVED_STACKS,
     Metric.EXPORTS_PER_MONTH,
+    Metric.SEATS,
 )
 
 
@@ -199,6 +202,16 @@ async def set_cancellation(db: Db, user: CurrentUser, payload: CancellationIn) -
     """
     await billing_service.set_cancellation(db, user, cancel=payload.cancel)
     return await get_subscription(db, user)
+
+
+@router.post("/seats", response_model=Envelope[SeatChangeOut], name="update_seats")
+async def update_seats(db: Db, user: CurrentUser, payload: SeatChangeIn) -> dict[str, Any]:
+    """Adjust the team's purchased seats, prorated (M21). Owner only —
+    the one capability the role matrix reserves for the owner alone."""
+    seats, used = await billing_service.change_seats(
+        db, user, seats=payload.seats, organization_id=payload.organization_id
+    )
+    return ok(SeatChangeOut(seats=seats, used=used))
 
 
 @router.get("/invoices", response_model=Envelope[list[InvoiceOut]], name="list_invoices")
