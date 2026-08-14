@@ -1,10 +1,12 @@
 """The queued-bundle path (M18).
 
 The fallback test is the one that matters operationally. `enqueue` returns
-False when Redis is unreachable, and it really is unreachable here — the call
-goes out to a closed port rather than to a mock. A queue being down has to make
-the product slower, never lossy: a `pending` row nothing will ever pick up is a
-download button that spins forever.
+False when Redis is unreachable, and the test patches it to say so rather than
+relying on the port being closed — a suite whose branch depends on whether the
+developer has `docker compose up` running asserts a different thing on every
+machine. A queue being down has to make the product slower, never lossy: a
+`pending` row nothing will ever pick up is a download button that spins
+forever.
 
 What is *not* covered here, deliberately: `build_export` running end to end
 under a real worker. The job opens its own `SessionLocal`, which cannot see a
@@ -65,10 +67,19 @@ async def _a_stack(client: AsyncClient) -> str:
 
 
 async def test_a_bundle_over_the_threshold_is_built_when_the_queue_is_down(
-    client: AsyncClient, db: AsyncSession
+    client: AsyncClient, db: AsyncSession, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Slower, never lossy. This is the branch a real outage takes."""
     from app.models.stack import Stack
+
+    # The outage is forced, not assumed. This used to rely on there being no
+    # Redis on the developer's machine, which meant the test asserted the
+    # fallback on a laptop and the *queued* path on any machine running the
+    # compose stack — passing in both cases, proving the fallback in only one.
+    async def _queue_is_down(job: str, *args: object) -> bool:
+        return False
+
+    monkeypatch.setattr(queue, "enqueue", _queue_is_down)
 
     user = await _pro_user(client, db, "queue.down@example.com")
     stack = await db.get(Stack, await _a_stack(client))

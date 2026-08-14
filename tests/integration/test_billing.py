@@ -210,9 +210,24 @@ async def test_unlimited_is_null_not_a_large_number(client: AsyncClient) -> None
     assert runs["limit"] is None
 
 
-async def test_a_plan_with_no_configured_price_is_not_offered(client: AsyncClient) -> None:
+async def test_a_plan_with_no_configured_price_is_not_offered(
+    client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """No key, no checkout. Offering a button that 402s is worse than not
-    offering one."""
+    offering one.
+
+    The prices are blanked explicitly. This used to rely on the developer's
+    `.env` having no Stripe key, which meant the assertion inverted the moment
+    one was added — the test was reading the machine, not the code.
+    """
+    for field in (
+        "stripe_price_pro_monthly",
+        "stripe_price_pro_annual",
+        "stripe_price_team_monthly",
+        "stripe_price_team_annual",
+    ):
+        monkeypatch.setattr(settings, field, "")
+
     body = (await client.get("/api/v1/billing/plans")).json()["data"]
     plans = {plan["key"]: plan for plan in body}
     assert plans["pro"]["checkout"] is False
