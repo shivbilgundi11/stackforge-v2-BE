@@ -121,10 +121,14 @@ class Subscription(Base, TimestampMixin):
         String(64), ForeignKey("organizations.id", ondelete="CASCADE")
     )
 
-    #: The provider's customer record outlives any single subscription — a user
-    #: who cancels and resubscribes six months later must land on the same
-    #: record, or their invoice history splits in two.
-    provider_customer_id: Mapped[str] = mapped_column(String(80), nullable=False)
+    #: NULL until the mandate is authorized. Razorpay creates the customer on
+    #: its own hosted page and tells us the id in the first webhook, because a
+    #: subscription created against a customer we made has no hosted page at
+    #: all (D-50). So this is a record of who paid, not a handle we check out
+    #: against — and a resubscribe six months later may well land on a second
+    #: customer record, which is the invoice-history split this column used to
+    #: prevent and no longer can.
+    provider_customer_id: Mapped[str | None] = mapped_column(String(80))
     provider_subscription_id: Mapped[str | None] = mapped_column(String(80), unique=True)
     #: Which plan this subscription is on, so a plan change can be detected by
     #: comparing against configuration rather than by trusting the event order.

@@ -56,16 +56,11 @@ class FakeRazorpay:
     """Records what it was asked to do. Asserted against, never called out."""
 
     def __init__(self) -> None:
-        self.customers: list[dict[str, Any]] = []
         self.subscriptions: list[dict[str, Any]] = []
         self.cancellations: list[dict[str, Any]] = []
         self.scheduled_cancellations: list[dict[str, Any]] = []
         self.quantities: list[dict[str, Any]] = []
         self.invoices: list[dict[str, Any]] = []
-
-    async def create_customer(self, *, email: str, name: str, user_id: str) -> str:
-        self.customers.append({"email": email, "name": name, "user_id": user_id})
-        return f"cust_{len(self.customers)}"
 
     async def create_subscription(self, **kwargs: Any) -> tuple[str, str]:
         self.subscriptions.append(kwargs)
@@ -316,11 +311,17 @@ async def test_checkout_writes_an_incomplete_subscription_before_redirecting(
     assert user.plan is Plan.FREE, "creating a subscription is not being on it"
 
 
-async def test_a_second_checkout_reuses_the_row_and_the_customer(
+async def test_a_second_checkout_reuses_the_row_and_names_no_customer(
     client: AsyncClient, db: AsyncSession, razorpay: FakeRazorpay
 ) -> None:
     """One live subscription per user is a database invariant, so an abandoned
-    Pro attempt followed by a Team attempt has to update rather than insert."""
+    Pro attempt followed by a Team attempt has to update rather than insert.
+
+    And neither attempt names a customer. Sending `customer_id` is what makes
+    Razorpay withhold the hosted page (D-50), so the assertion is on its
+    absence — a regression here is not a failing request, it is a live
+    checkout that dead-ends on Razorpay's error page.
+    """
     user = await _sign_in(client, db, "reuse@example.com")
     await client.post(CHECKOUT, json={"plan": "pro", "interval": "monthly"})
     await client.post(CHECKOUT, json={"plan": "team", "interval": "monthly", "seats": 3})
@@ -333,7 +334,66 @@ async def test_a_second_checkout_reuses_the_row_and_the_customer(
     assert len(rows) == 1
     assert rows[0].plan is Plan.TEAM
     assert rows[0].seats == 3
-    assert len(razorpay.customers) == 1, "one customer per user, forever"
+    assert rows[0].provider_customer_id is None, "not known until the mandate is authorized"
+    assert all("customer_id" not in call for call in razorpay.subscriptions)
+    assert [call["notify_email"] for call in razorpay.subscriptions] == [
+        "reuse@example.com",
+        "reuse@example.com",
+    ]
+
+
+async def test_the_webhook_is_where_the_customer_id_comes_from(
+    client: AsyncClient, db: AsyncSession, razorpay: FakeRazorpay, unsigned: None
+) -> None:
+    """Checkout cannot know it, so the first delivery has to teach it.
+
+    Razorpay creates the customer when the mandate is authorized, so a row
+    sitting between the redirect and the webhook legitimately has none. If this
+    never landed, `provider_customer_id` would stay NULL forever and the
+    fallback that resolves a delivery by customer would never match.
+    """
+    user = await _sign_in(client, db, "learns-customer@example.com")
+    await client.post(CHECKOUT, json={"plan": "pro", "interval": "monthly"})
+
+    subscription = await db.scalar(select(Subscription).where(Subscription.user_id == user.id))
+    assert subscription is not None
+    assert subscription.provider_customer_id is None
+
+    assert (
+        await _post_event(
+            client,
+            _subscription_event(customer_id="cust_learned", user_id=user.id),
+        )
+        == 200
+    )
+
+    await db.refresh(subscription)
+    assert subscription.provider_customer_id == "cust_learned"
+
+
+async def test_a_later_event_without_a_customer_does_not_erase_it(
+    client: AsyncClient, db: AsyncSession, razorpay: FakeRazorpay, unsigned: None
+) -> None:
+    """The link is written once and kept.
+
+    Not every entity carries every field, and treating a missing one as an
+    instruction to clear would drop the only handle we have on who paid.
+    """
+    user = await _sign_in(client, db, "keeps-customer@example.com")
+    await client.post(CHECKOUT, json={"plan": "pro", "interval": "monthly"})
+    await _post_event(
+        client,
+        _subscription_event(customer_id="cust_kept", user_id=user.id),
+        event_id="evt_first",
+    )
+
+    event = _subscription_event(event="subscription.charged", user_id=user.id)
+    del event["payload"]["subscription"]["entity"]["customer_id"]
+    assert await _post_event(client, event, event_id="evt_second") == 200
+
+    subscription = await db.scalar(select(Subscription).where(Subscription.user_id == user.id))
+    assert subscription is not None
+    assert subscription.provider_customer_id == "cust_kept"
 
 
 async def test_a_trial_is_offered_once(

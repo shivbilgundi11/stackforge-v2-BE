@@ -382,8 +382,7 @@ async def start_checkout(
     if subscription is not None and subscription.is_paid and subscription.plan == plan:
         raise Conflict("You are already on this plan.")
 
-    customer_id = await _ensure_customer(client, subscription, user)
-    subscription = await _ensure_row(db, user, subscription, plan=plan, customer_id=customer_id)
+    subscription = await _ensure_row(db, user, subscription, plan=plan)
 
     # A trial is offered once. Razorpay would happily start another delayed
     # subscription, and "cancel and re-subscribe" is not a supported way to get
@@ -396,7 +395,7 @@ async def start_checkout(
 
     provider_subscription_id, url = await client.create_subscription(
         plan_id=provider_plan_id,
-        customer_id=customer_id,
+        notify_email=user.email,
         quantity=seats,
         total_count=_TOTAL_COUNT.get(interval, 120),
         start_at=start_at,
@@ -465,29 +464,12 @@ async def set_cancellation(db: AsyncSession, user: User, *, cancel: bool) -> Sub
     return subscription
 
 
-async def _ensure_customer(
-    client: razorpay_integration.RazorpayClient,
-    subscription: Subscription | None,
-    user: User,
-) -> str:
-    """One Razorpay customer per user, forever.
-
-    Reused across subscriptions on purpose: a user who cancels and comes back
-    six months later must land on the same customer record, or their invoice
-    history splits in two and support cannot answer "what have I paid you".
-    """
-    if subscription is not None and subscription.provider_customer_id:
-        return subscription.provider_customer_id
-    return await client.create_customer(email=user.email, name=user.name, user_id=user.id)
-
-
 async def _ensure_row(
     db: AsyncSession,
     user: User,
     subscription: Subscription | None,
     *,
     plan: Plan,
-    customer_id: str,
 ) -> Subscription:
     """Reuse the live row rather than inserting a second one.
 
@@ -510,7 +492,6 @@ async def _ensure_row(
     reason this function reuses rows at all.
     """
     if subscription is not None:
-        subscription.provider_customer_id = customer_id
         if not subscription.is_paid:
             subscription.plan = plan
         await db.flush()
@@ -519,7 +500,6 @@ async def _ensure_row(
     row = Subscription(
         id=new_id("sub"),
         user_id=user.id,
-        provider_customer_id=customer_id,
         plan=plan,
         status=SubscriptionStatus.INCOMPLETE,
     )
@@ -677,6 +657,11 @@ async def _on_subscription_changed(db: AsyncSession, obj: dict[str, Any]) -> str
         subscription.plan = plan
     if isinstance(sub_id := obj.get("id"), str):
         subscription.provider_subscription_id = sub_id
+    # The customer does not exist until the mandate is authorized (D-50), so
+    # this is the first and only place we learn its id. Never overwritten with
+    # nothing: a later event without the field must not erase the link.
+    if isinstance(customer_id := obj.get("customer_id"), str) and customer_id:
+        subscription.provider_customer_id = customer_id
 
     # Razorpay reports a scheduled cancellation as an end date rather than a
     # boolean: `end_at` is set while the subscription is still running.
@@ -1016,18 +1001,23 @@ async def _resolve_subscription(db: AsyncSession, obj: dict[str, Any]) -> Subscr
     """Find our row from a Razorpay subscription entity.
 
     Three routes, in order of reliability: the subscription id we stored, the
-    metadata we set at checkout, then the customer. The last is a fallback
-    because a customer can in principle hold more than one subscription, and
-    matching on it alone would attach the wrong one.
+    notes we set at checkout, then the customer. The last is a fallback because
+    a customer can in principle hold more than one subscription, and matching
+    on it alone would attach the wrong one.
+
+    The middle and last routes read `notes` and `customer_id` — Razorpay's
+    field names. They were `metadata.client_reference_id` and `customer` when
+    this was Stripe, which meant both fallbacks were dead: every delivery
+    resolved on the first route or not at all.
     """
     if isinstance(sub_id := obj.get("id"), str):
         found = await _by_provider_subscription(db, sub_id)
         if found is not None:
             return found
 
-    metadata = obj.get("metadata")
-    if isinstance(metadata, dict):
-        user_id = metadata.get("client_reference_id")
+    notes = obj.get("notes")
+    if isinstance(notes, dict):
+        user_id = notes.get("user_id")
         if isinstance(user_id, str):
             user = await db.get(User, user_id)
             if user is not None:
@@ -1035,7 +1025,7 @@ async def _resolve_subscription(db: AsyncSession, obj: dict[str, Any]) -> Subscr
                 if found is not None:
                     return found
 
-    if isinstance(customer_id := obj.get("customer"), str):
+    if isinstance(customer_id := obj.get("customer_id"), str):
         return await _by_customer(db, customer_id)
 
     return None

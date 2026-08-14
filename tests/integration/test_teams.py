@@ -502,9 +502,6 @@ class _SeatRazorpay:
     def __init__(self) -> None:
         self.quantities: list[dict[str, Any]] = []
 
-    async def create_customer(self, **kwargs: Any) -> str:
-        return "cust_seat"
-
     async def create_subscription(self, **kwargs: Any) -> tuple[str, str]:
         return "sub_seat_1", "https://rzp.io/i/seat"
 

@@ -23,6 +23,11 @@ side and carries a `short_url` — a hosted page where the customer authorizes a
 mandate. That URL is what we redirect to, so the subscription row exists before
 the customer has paid, in `created` state.
 
+**The customer is not ours to create.** Stripe let us make the customer first
+and attach the checkout to it. Razorpay withdraws the hosted page entirely from
+a subscription created against a `customer_id`, so we send only a notify email
+and read the customer id off the first webhook instead.
+
 **There is no billing portal.** Razorpay has no equivalent, so invoices and
 cancellation are served in-app from the API calls below.
 
@@ -65,13 +70,11 @@ class RazorpayClient(Protocol):
     billing needs.
     """
 
-    async def create_customer(self, *, email: str, name: str, user_id: str) -> str: ...
-
     async def create_subscription(
         self,
         *,
         plan_id: str,
-        customer_id: str,
+        notify_email: str,
         quantity: int,
         total_count: int,
         start_at: int | None,
@@ -115,30 +118,11 @@ class LiveRazorpay:
         except _SDK_ERRORS as exc:
             raise _upstream(action, exc) from exc
 
-    async def create_customer(self, *, email: str, name: str, user_id: str) -> str:
-        # `fail_existing=0`: Razorpay 400s on a duplicate email by default, and
-        # a customer who cancelled and came back six months later must land on
-        # the same record or their invoice history splits in two.
-        customer = await self._call(
-            "customer creation",
-            self._client.customer.create,
-            {
-                "name": name,
-                "email": email,
-                "fail_existing": 0,
-                # The link back. Without it, a customer found in the Razorpay
-                # dashboard cannot be traced to an account here without a
-                # database query nobody in support can run.
-                "notes": {"user_id": user_id},
-            },
-        )
-        return str(customer["id"])
-
     async def create_subscription(
         self,
         *,
         plan_id: str,
-        customer_id: str,
+        notify_email: str,
         quantity: int,
         total_count: int,
         start_at: int | None,
@@ -151,16 +135,28 @@ class LiveRazorpay:
         before anyone pays, which is why `billing_service` treats
         `subscription.activated` rather than the redirect as the moment a plan
         is granted.
+
+        **Never send `customer_id`.** A subscription created against a
+        pre-made customer has no hosted page at all — `short_url` resolves to
+        Razorpay's "Hosted page is not available" error, which is a dead end
+        for every customer who reaches it. Verified by isolation on
+        2026-08-14: the same call renders once `customer_id` is dropped, with
+        or without `notify_info`, and `start_at` is not implicated. So the
+        customer is Razorpay's to create when the mandate is authorized, and
+        we learn its id from the first webhook (D-50).
         """
         params: dict[str, Any] = {
             "plan_id": plan_id,
-            "customer_id": customer_id,
             "quantity": quantity,
             # Razorpay requires a finite number of billing cycles. This is the
             # ceiling, not a commitment — cancelling ends it earlier, and the
             # count is high enough (10 years monthly) that nobody reaches it.
             "total_count": total_count,
             "customer_notify": 1,
+            # The only identity Razorpay gets up front. It prefills the hosted
+            # page and is what its receipts go to; the customer record itself
+            # is created on authorization.
+            "notify_info": {"notify_email": notify_email},
             "notes": notes,
         }
         if start_at is not None:

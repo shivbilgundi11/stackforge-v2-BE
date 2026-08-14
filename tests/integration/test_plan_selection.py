@@ -46,9 +46,6 @@ class _FakeRazorpay:
     def __init__(self) -> None:
         self.checkouts: list[dict[str, Any]] = []
 
-    async def create_customer(self, *, email: str, name: str, user_id: str) -> str:
-        return "cust_selection"
-
     async def create_subscription(self, **kwargs: Any) -> tuple[str, str]:
         self.checkouts.append(kwargs)
         return f"sub_{len(self.checkouts)}", "https://rzp.io/i/selection"
