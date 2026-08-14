@@ -31,6 +31,7 @@ from app.schemas.billing import (
     InvoiceOut,
     PlanFeatureOut,
     PlanLimitOut,
+    PlanSelectionIn,
     PortalOut,
     PricingPlanOut,
     SeatChangeIn,
@@ -94,6 +95,7 @@ async def list_plans(db: Db, identity: CallerIdentity) -> dict[str, Any]:
                 trial_days=spec.trial_days,
                 highlights=list(spec.highlights),
                 cta=spec.cta,
+                self_serve=spec.checkout,
                 # A plan with no price configured cannot be bought here, however
                 # much the copy would like to sell it.
                 checkout=spec.checkout and _has_price(spec.plan),
@@ -153,8 +155,28 @@ async def get_subscription(db: Db, user: CurrentUser) -> dict[str, Any]:
             trial_ends_at=summary.trial_ends_at,
             past_due_since=summary.past_due_since,
             grace_days_left=summary.grace_days_left,
+            pending_plan=summary.pending_plan.value if summary.pending_plan else None,
+            pending_interval=summary.pending_interval,
+            payment_required=summary.payment_required,
         )
     )
+
+
+@router.post("/plan-selection", response_model=Envelope[SubscriptionOut], name="select_plan")
+async def select_plan(db: Db, user: CurrentUser, payload: PlanSelectionIn) -> dict[str, Any]:
+    """Choose the plan this account intends to buy, or decline and stay free.
+
+    Separate from `checkout-session` because choosing and paying are separated
+    in time: the choice is made on the signup form, and the card arrives at the
+    wall — possibly on a different device, days later. Storing the choice is
+    what lets the second half of that happen at all.
+    """
+    chosen = billing_service.pending_plan_for(payload.plan) if payload.plan else None
+    if payload.plan not in (None, "free") and chosen is None:
+        raise ValidationFailed.on_field("plan", "That plan cannot be bought here.")
+
+    await billing_service.select_plan(db, user, plan=chosen, interval=payload.interval)
+    return await get_subscription(db, user)
 
 
 @router.get("/usage", response_model=Envelope[UsageSummaryOut], name="get_usage")

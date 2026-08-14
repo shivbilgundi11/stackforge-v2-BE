@@ -105,6 +105,23 @@ def price_id_for(plan: Plan, interval: Interval) -> str:
             return ""
 
 
+def pending_plan_for(chosen: str) -> Plan | None:
+    """The signup form's plan choice, as an owed plan.
+
+    Free is not owed — it is what an account already is — so it maps to None
+    rather than to `Plan.FREE`. Anything that is not a self-serve plan maps to
+    None too: a wall demanding payment for a plan with no checkout is a dead
+    end, and Enterprise is a conversation, not a button.
+    """
+    try:
+        plan = Plan(chosen)
+    except ValueError:
+        return None
+    if plan is Plan.FREE:
+        return None
+    return plan if plan_data.spec_for(plan).checkout else None
+
+
 def plan_for_price(price_id: str | None) -> Plan | None:
     """Reverse the map, so a subscription's price identifies its plan.
 
@@ -173,6 +190,12 @@ class BillingSummary:
     past_due_since: datetime | None
     #: Days left before a past-due subscription is downgraded, or None.
     grace_days_left: int | None
+    #: A plan chosen at signup and not yet paid for, and the interval it was
+    #: chosen on. What the payment wall renders.
+    pending_plan: Plan | None
+    pending_interval: str | None
+    #: Whether the wall should stand in front of the account-only surfaces.
+    payment_required: bool
 
 
 async def summary(db: AsyncSession, user: User) -> BillingSummary:
@@ -193,6 +216,60 @@ async def summary(db: AsyncSession, user: User) -> BillingSummary:
         trial_ends_at=subscription.trial_ends_at if subscription else None,
         past_due_since=subscription.past_due_since if subscription else None,
         grace_days_left=grace_left,
+        pending_plan=user.pending_plan,
+        pending_interval=user.pending_interval,
+        payment_required=payment_required(user, subscription),
+    )
+
+
+def payment_required(user: User, subscription: Subscription | None) -> bool:
+    """Whether this account should be held at the payment wall.
+
+    Two causes, and only two. A plan was chosen and never paid for, or a
+    subscription went past due and its grace period ran out — at which point
+    the plan has already been downgraded and the account is being *told* why
+    rather than being denied anything it still has.
+
+    Deliberately not a permission check. Every quota and feature decision reads
+    `user.plan`, which is Free until a webhook says otherwise; this only
+    decides which screen a browser lands on.
+    """
+    if user.pending_plan is not None:
+        return True
+    if subscription is None or subscription.past_due_since is None:
+        return False
+    deadline = subscription.past_due_since + timedelta(days=settings.dunning_grace_days)
+    return utcnow() >= deadline
+
+
+async def select_plan(
+    db: AsyncSession, user: User, *, plan: Plan | None, interval: Interval
+) -> None:
+    """Record — or clear — the plan this account intends to buy.
+
+    `None` is the escape from the wall: "continue on Free". It is deliberately
+    always available. A signup form that can trap someone on a payment screen
+    with no way past it converts worse than one they can decline, and support
+    ends up clearing the column by hand.
+    """
+    if plan is None:
+        user.pending_plan = None
+        user.pending_interval = None
+        await db.flush()
+        logger.info("billing.plan_selection_cleared", user_id=user.id)
+        return
+
+    spec = plan_data.spec_for(plan)
+    if not spec.checkout:
+        raise ValidationFailed.on_field("plan", f"The {spec.label} plan is not self-serve.")
+    if interval not in ("monthly", "annual"):
+        raise ValidationFailed.on_field("interval", "Choose monthly or annual billing.")
+
+    user.pending_plan = plan
+    user.pending_interval = interval
+    await db.flush()
+    logger.info(
+        "billing.plan_selected", user_id=user.id, plan=plan.value, interval=interval
     )
 
 
@@ -266,8 +343,12 @@ async def start_checkout(
         customer_id=customer_id,
         price_id=price_id,
         client_reference_id=user.id,
-        success_url=f"{settings.web_base_url}/dashboard?session_id={{CHECKOUT_SESSION_ID}}",
-        cancel_url=f"{settings.web_base_url}/pricing",
+        # Not `/dashboard`: the redirect races the webhook, and a browser that
+        # wins the race lands on a dashboard that still believes the account is
+        # unpaid — which bounces it straight back to the wall. `/checkout/done`
+        # waits for the subscription to say it is real, then forwards.
+        success_url=f"{settings.web_base_url}/checkout/done?session_id={{CHECKOUT_SESSION_ID}}",
+        cancel_url=f"{settings.web_base_url}/checkout",
         quantity=seats,
         trial_days=trial_days,
     )
@@ -360,10 +441,24 @@ async def _ensure_row(
     user, so an abandoned Pro checkout followed by a Team checkout has to
     update rather than insert — otherwise the second checkout fails on a
     constraint the user has no way to understand.
+
+    **A paid row keeps its plan.** `plan` here is what the caller *intends to
+    buy*, and on a live subscription that is not a fact yet — Stripe has not
+    charged anything and may never. Writing it down anyway meant an upgrade
+    that got as far as the Stripe page and was then abandoned left the row
+    claiming the better plan, and `sync_user_plan` reads exactly that field:
+    the next webhook for that account granted Team to somebody paying for Pro.
+    It also made the "already on this plan" guard fire against a plan they were
+    not on, so retrying the upgrade was refused with no way forward.
+
+    An unpaid row is different. It exists only to be attached to an in-flight
+    checkout, nothing has been granted from it, and repointing it is the whole
+    reason this function reuses rows at all.
     """
     if subscription is not None:
-        subscription.plan = plan
         subscription.stripe_customer_id = customer_id
+        if not subscription.is_paid:
+            subscription.plan = plan
         await db.flush()
         return subscription
 
@@ -734,6 +829,22 @@ async def sync_user_plan(db: AsyncSession, user: User) -> None:
         )
     user.plan = target
     user.plan_source = source
+
+    # The debt is settled the moment the plan arrives, from whichever source.
+    # `>=` rather than `==` because being granted Team by an organization
+    # satisfies a personal intent to buy Pro — holding that user at a wall
+    # asking them to pay for a lesser plan than the one they already have is
+    # the kind of loop nobody escapes without support.
+    if user.pending_plan is not None and _PLAN_RANK[target] >= _PLAN_RANK[user.pending_plan]:
+        logger.info(
+            "billing.plan_selection_settled",
+            user_id=user.id,
+            wanted=user.pending_plan.value,
+            got=target.value,
+        )
+        user.pending_plan = None
+        user.pending_interval = None
+
     await db.flush()
 
 

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator
 
@@ -22,6 +23,12 @@ class RegisterRequest(_Base):
     #: address, and the address is verified implicitly — possession of the
     #: invite link proves control of the inbox it was sent to.
     invite_token: str | None = Field(default=None, min_length=16, max_length=256)
+    #: The plan chosen on the signup form. `free` and omitted are the same
+    #: thing; a paid plan is recorded as owed and the account lands on the
+    #: payment wall at first sign-in. Ignored alongside `invite_token` — an
+    #: invitee is taking a seat somebody else already paid for.
+    plan: Literal["free", "pro", "team"] = "free"
+    interval: Literal["monthly", "annual"] = "monthly"
 
     @field_validator("name")
     @classmethod

@@ -82,6 +82,21 @@ class User(Base, TimestampMixin, SoftDeleteMixin):
         nullable=False,
     )
 
+    # A paid plan chosen at registration and not yet paid for. Null is the
+    # normal state; a value here means the account owes a checkout and is what
+    # the payment wall reads.
+    #
+    # Deliberately separate from `plan`, which is what the user *has*. Writing
+    # the chosen plan straight onto `plan` would hand out Pro to anyone who
+    # picked it on the signup form and closed the tab, and there is no later
+    # event that would take it back — Stripe never sends a webhook for a
+    # checkout that did not happen.
+    pending_plan: Mapped[Plan | None] = mapped_column(
+        Enum(Plan, name="plan", values_callable=lambda e: [m.value for m in e], create_type=False),
+    )
+    #: "monthly" | "annual" — which price the wall should open checkout on.
+    pending_interval: Mapped[str | None] = mapped_column(String(10))
+
     locked_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     failed_login_count: Mapped[int] = mapped_column(
         BigInteger, default=0, server_default=text("0"), nullable=False
@@ -91,7 +106,23 @@ class User(Base, TimestampMixin, SoftDeleteMixin):
     __table_args__ = (
         Index("ix_users_plan", "plan"),
         Index("ix_users_active", "deleted_at", postgresql_where=text("deleted_at IS NULL")),
+        Index(
+            "ix_users_pending_plan",
+            "pending_plan",
+            postgresql_where=text("pending_plan IS NOT NULL"),
+        ),
     )
+
+    @property
+    def owes_checkout(self) -> bool:
+        """A paid plan was chosen and has not been paid for.
+
+        Read by the payment wall. Not a security boundary — `plan` is what
+        every feature check reads, and it stays Free until a webhook says
+        otherwise, so a user who dodges the wall gets the free tier rather
+        than the plan they picked.
+        """
+        return self.pending_plan is not None
 
     @property
     def is_verified(self) -> bool:

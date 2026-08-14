@@ -46,7 +46,13 @@ class PricingPlanOut(BaseModel):
     highlights: list[str]
     cta: str
     #: False for Free and Enterprise: one is the default, the other is a
-    #: conversation.
+    #: conversation. A plan that is self-serve in principle but has no price
+    #: configured in this environment.
+    self_serve: bool
+    #: Whether this plan can be bought *right now* — self-serve and priced.
+    #: The two are separate because they need different answers on screen: an
+    #: unpriced Pro plan should still send a signed-out visitor to signup,
+    #: while Enterprise should always send them to a conversation.
     checkout: bool
     #: True for the caller's own plan, so the page can mark it rather than
     #: offering to sell it again.
@@ -68,6 +74,23 @@ class SubscriptionOut(BaseModel):
     past_due_since: datetime | None
     #: Days before a failed payment downgrades the account, or null.
     grace_days_left: int | None
+    #: A plan chosen at signup and not yet paid for, or null. What the payment
+    #: wall renders.
+    pending_plan: str | None
+    pending_interval: str | None
+    #: Whether the account-only surfaces should redirect to the wall.
+    payment_required: bool
+
+
+class PlanSelectionIn(BaseModel):
+    """The wall's two buttons: pick a paid plan, or decline and stay free.
+
+    `null` is a first-class value here, not an omission — declining has to be
+    an explicit, recordable action, or the only way off the wall is to pay.
+    """
+
+    plan: str | None = Field(default=None, pattern="^(free|pro|team)$")
+    interval: str = Field(default="monthly", pattern="^(monthly|annual)$")
 
 
 class UsageSummaryOut(BaseModel):

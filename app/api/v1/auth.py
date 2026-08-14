@@ -41,6 +41,7 @@ from app.schemas.auth import (
 )
 from app.services import (
     auth_service,
+    billing_service,
     email_templates,
     session_service,
     token_service,
@@ -113,6 +114,10 @@ def _tokens_for(user: Any, session_id: str) -> SessionTokens:
 )
 async def register(payload: RegisterRequest, db: Db, meta: RequestMeta) -> dict[str, Any]:
     email_verified = False
+    # The plan chosen on the form. An invitee is taking a seat the inviting
+    # organization already pays for, so the field is ignored on that path
+    # rather than sending them to a wall for a plan they are not buying.
+    pending_plan = billing_service.pending_plan_for(payload.plan)
     if payload.invite_token is not None:
         # Signup-from-invite (M21). The token 404s if dead; a mismatched email
         # is refused rather than silently registered unverified, because the
@@ -126,6 +131,7 @@ async def register(payload: RegisterRequest, db: Db, meta: RequestMeta) -> dict[
                 "email", "This invitation was sent to a different email address."
             )
         email_verified = True
+        pending_plan = None
 
     await auth_service.register(
         db,
@@ -134,6 +140,8 @@ async def register(payload: RegisterRequest, db: Db, meta: RequestMeta) -> dict[
         name=payload.name,
         meta=meta,
         email_verified=email_verified,
+        pending_plan=pending_plan,
+        pending_interval=payload.interval,
     )
     # No branch on the result. A different status or body for an existing
     # address is an enumeration oracle.

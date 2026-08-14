@@ -33,7 +33,7 @@ from app.models.auth import (
     AuthToken,
     TokenPurpose,
 )
-from app.models.user import User
+from app.models.user import Plan, User
 from app.services import email_templates, password_service, session_service, token_service
 
 logger = get_logger("auth")
@@ -154,6 +154,8 @@ async def register(
     name: str,
     meta: RequestMeta,
     email_verified: bool = False,
+    pending_plan: Plan | None = None,
+    pending_interval: str | None = None,
 ) -> User | None:
     """Returns the new user, or None when the address already exists.
 
@@ -182,6 +184,10 @@ async def register(
         name=name.strip(),
         password_hash=password_service.hash_password(password),
         password_changed_at=utcnow(),
+        # What they picked on the form, not what they have. `plan` stays Free
+        # until a webhook says a card was charged.
+        pending_plan=pending_plan,
+        pending_interval=pending_interval if pending_plan is not None else None,
     )
     if email_verified:
         # Signup-from-invite (M21): possession of the invite link proves
