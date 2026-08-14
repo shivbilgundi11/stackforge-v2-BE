@@ -9,7 +9,7 @@ Exports first, then everything M20 needs a clock for:
     definition of done both require that expired export objects leave storage,
     and because the bytes live on the row this is one statement rather than a
     reconciliation between a table and a bucket.
-  * `retry_stripe_events` · `expire_trials` · `close_dunning` ·
+  * `retry_billing_events` · `expire_trials` · `close_dunning` ·
     `reconcile_usage` · `price_change_alerts` · `deprecation_alerts` — the
     billing clock. Their logic lives in `workers/billing.py`; what is here is
     the session handling and the schedule.
@@ -46,7 +46,7 @@ logger = get_logger("worker")
 #: sides, so they live here once rather than as literals at call sites.
 BUILD_EXPORT = "build_export"
 PURGE_EXPORTS = "purge_expired_exports"
-RETRY_STRIPE_EVENTS = "retry_stripe_events"
+RETRY_BILLING_EVENTS = "retry_billing_events"
 
 
 def redis_settings() -> RedisSettings:
@@ -157,7 +157,7 @@ async def purge_expired_exports(_context: dict[str, Any]) -> int:
 # without a queue, which is the same split `build_export` uses.
 
 
-async def retry_stripe_events(_context: dict[str, Any]) -> int:
+async def retry_billing_events(_context: dict[str, Any]) -> int:
     async with SessionLocal() as session:
         processed = await billing_jobs.retry_failed_events(session)
         await session.commit()
@@ -220,7 +220,7 @@ class WorkerSettings:
     functions: ClassVar[list[Any]] = [
         build_export,
         purge_expired_exports,
-        retry_stripe_events,
+        retry_billing_events,
         expire_trials,
         close_dunning,
         reconcile_usage,
@@ -237,7 +237,7 @@ class WorkerSettings:
         cron(purge_expired_exports, hour=3, minute=17, run_at_startup=False),  # type: ignore[arg-type]
         # Hourly. A failed webhook is a customer who paid and was not upgraded,
         # so the retry loop is the one billing job that cannot wait for night.
-        cron(retry_stripe_events, minute=23, run_at_startup=False),  # type: ignore[arg-type]
+        cron(retry_billing_events, minute=23, run_at_startup=False),  # type: ignore[arg-type]
         # Both lifecycle jobs run early, before anyone is using the product, so
         # a downgrade never lands mid-session.
         cron(expire_trials, hour=2, minute=11, run_at_startup=False),  # type: ignore[arg-type]
@@ -262,7 +262,7 @@ class WorkerSettings:
 __all__ = [
     "BUILD_EXPORT",
     "PURGE_EXPORTS",
-    "RETRY_STRIPE_EVENTS",
+    "RETRY_BILLING_EVENTS",
     "WorkerSettings",
     "build_export",
     "close_dunning",
@@ -272,5 +272,5 @@ __all__ = [
     "price_change_alerts",
     "purge_expired_exports",
     "reconcile_usage",
-    "retry_stripe_events",
+    "retry_billing_events",
 ]

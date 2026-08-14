@@ -89,7 +89,7 @@ class User(Base, TimestampMixin, SoftDeleteMixin):
     # Deliberately separate from `plan`, which is what the user *has*. Writing
     # the chosen plan straight onto `plan` would hand out Pro to anyone who
     # picked it on the signup form and closed the tab, and there is no later
-    # event that would take it back — Stripe never sends a webhook for a
+    # event that would take it back — Razorpay never sends a webhook for a
     # checkout that did not happen.
     pending_plan: Mapped[Plan | None] = mapped_column(
         Enum(Plan, name="plan", values_callable=lambda e: [m.value for m in e], create_type=False),

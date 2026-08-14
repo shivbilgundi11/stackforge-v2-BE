@@ -210,11 +210,11 @@ class PlanSpec:
     plan: Plan
     label: str
     tagline: str
-    #: Minor units, per month. `None` means "talk to us" — Enterprise has no
-    #: self-serve price, and a page that invents one would be lying.
-    monthly_cents: int | None
+    #: Minor units (paise), per month. `None` means "talk to us" — Enterprise
+    #: has no self-serve price, and a page that invents one would be lying.
+    monthly_minor: int | None
     #: Annual billing at two months free, so twelve months costs ten.
-    annual_cents: int | None
+    annual_minor: int | None
     per_seat: bool
     trial_days: int
     #: The pricing table's bullet list, in order.
@@ -225,15 +225,17 @@ class PlanSpec:
     checkout: bool
 
 
-CURRENCY: Final = "usd"
+#: Razorpay settles in INR on a standard Indian account; charging USD needs
+#: International Payments enabled and approved. Every amount below is paise.
+CURRENCY: Final = "inr"
 
 PLANS: Final[tuple[PlanSpec, ...]] = (
     PlanSpec(
         plan=Plan.FREE,
         label="Free",
         tagline="Every tool, every catalog page, no card.",
-        monthly_cents=0,
-        annual_cents=0,
+        monthly_minor=0,
+        annual_minor=0,
         per_seat=False,
         trial_days=0,
         highlights=(
@@ -249,8 +251,8 @@ PLANS: Final[tuple[PlanSpec, ...]] = (
         plan=Plan.PRO,
         label="Pro",
         tagline="For the person who has to defend the number.",
-        monthly_cents=1900,
-        annual_cents=19000,
+        monthly_minor=159_900,
+        annual_minor=1_599_900,
         per_seat=False,
         trial_days=7,
         highlights=(
@@ -268,8 +270,8 @@ PLANS: Final[tuple[PlanSpec, ...]] = (
         plan=Plan.TEAM,
         label="Team",
         tagline="One shared view of what the team has decided.",
-        monthly_cents=4900,
-        annual_cents=49000,
+        monthly_minor=399_900,
+        annual_minor=3_999_900,
         per_seat=True,
         trial_days=7,
         highlights=(
@@ -286,8 +288,8 @@ PLANS: Final[tuple[PlanSpec, ...]] = (
         plan=Plan.ENTERPRISE,
         label="Enterprise",
         tagline="Your procurement process, our numbers.",
-        monthly_cents=None,
-        annual_cents=None,
+        monthly_minor=None,
+        annual_minor=None,
         per_seat=True,
         trial_days=0,
         highlights=(
@@ -360,7 +362,7 @@ DEFAULT_QUOTAS: Final[dict[tuple[Plan, bool], dict[Metric, int | None]]] = {
         Metric.PROJECTS: None,
         Metric.SAVED_STACKS: None,
         Metric.EXPORTS_PER_MONTH: 500,
-        # The seat *count* is bought in Stripe and written onto the
+        # The seat *count* is bought in Razorpay and written onto the
         # subscription; this is the floor a Team plan starts at.
         Metric.SEATS: 5,
     },
@@ -387,11 +389,11 @@ def outranks(plan: Plan, minimum: Plan) -> bool:
     return PLAN_RANK[plan] >= PLAN_RANK[minimum]
 
 
-def annual_saving_cents(spec: PlanSpec) -> int:
+def annual_saving_minor(spec: PlanSpec) -> int:
     """What the annual price saves against twelve monthly payments."""
-    if spec.monthly_cents is None or spec.annual_cents is None:
+    if spec.monthly_minor is None or spec.annual_minor is None:
         return 0
-    return max(0, spec.monthly_cents * 12 - spec.annual_cents)
+    return max(0, spec.monthly_minor * 12 - spec.annual_minor)
 
 
 __all__ = [
@@ -406,7 +408,7 @@ __all__ = [
     "Feature",
     "FeatureSpec",
     "PlanSpec",
-    "annual_saving_cents",
+    "annual_saving_minor",
     "feature_spec",
     "outranks",
     "spec_for",

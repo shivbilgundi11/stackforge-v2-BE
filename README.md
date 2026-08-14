@@ -49,7 +49,7 @@ are printed to the API log.
 | `uv run alembic upgrade head` | Apply migrations |
 | `uv run python -m app.cli openapi` | Dump the OpenAPI schema |
 | `uv run python -m app.cli seed` | Load the catalog, templates, and plan quotas |
-| `uv run python -m app.cli stripe-sync` | Create the Stripe products and prices |
+| `uv run python -m app.cli razorpay-sync` | Create the Razorpay plans |
 
 ## Layout
 
@@ -99,19 +99,26 @@ feature_service.consume(db, identity, Metric.TOOL_RUNS_PER_DAY)  # or raises 402
 Routes use the `require_feature(...)` and `consume_quota(...)` dependencies. No
 route contains a plan comparison, and no service keeps its own limit table.
 
-Stripe is optional. Without `STRIPE_SECRET_KEY` the module imports, checkout
-returns a 402 that says so, and the pricing page hides its buy buttons — which
-is the state local development and CI run in. To exercise the real path:
+Razorpay is optional. Without `RAZORPAY_ENABLED` and the keys the module
+imports, checkout returns a 402 that says so, and the pricing page hides its buy
+buttons — which is the state local development and CI run in. To exercise the
+real path:
 
 ```bash
-uv run python -m app.cli stripe-sync     # creates products and prices, prints the ids
-stripe listen --forward-to localhost:8000/api/v1/billing/webhook
+uv run python -m app.cli razorpay-sync   # creates the plans, prints the ids
+cloudflared tunnel --url http://localhost:8000   # any tunnel will do
 ```
 
-Webhook deliveries are recorded in `stripe_events` **before** they are
+Razorpay ships no CLI that forwards webhooks, so the tunnel URL has to be
+registered once under Dashboard → Settings → Webhooks, pointing at
+`/api/v1/billing/webhook` with the secret you already put in
+`RAZORPAY_WEBHOOK_SECRET` (D-50). Until that exists, checkout completes and
+nothing upgrades.
+
+Webhook deliveries are recorded in `billing_events` **before** they are
 processed, and `processed_at` — not the row's existence — is what marks one
 done (D-45). A handler that raises leaves an unprocessed row with its error, an
-hourly job retries it, and the endpoint still answers 200 so Stripe does not
+hourly job retries it, and the endpoint still answers 200 so Razorpay does not
 disable it.
 
 ## Background work
@@ -125,7 +132,7 @@ supported state, just a slower and untidier one.
 | --- | --- | --- |
 | `build_export` | on demand | Renders a bundle predicted to be large |
 | `purge_expired_exports` | 03:17 daily | Reclaims storage from expired exports |
-| `retry_stripe_events` | hourly | Re-runs webhook deliveries whose handler failed |
+| `retry_billing_events` | hourly | Re-runs webhook deliveries whose handler failed |
 | `expire_trials` | 02:11 daily | Drops an expired no-card trial to Free |
 | `close_dunning` | 02:29 daily | Downgrades a payment that never recovered |
 | `reconcile_usage` | 23:47 daily | Compares the Redis counters against `usage_records` |

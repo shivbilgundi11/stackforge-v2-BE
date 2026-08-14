@@ -445,7 +445,7 @@ async def test_an_expired_trial_drops_to_free_and_keeps_the_work(
         Subscription(
             id=new_id("sub"),
             user_id=user.id,
-            stripe_customer_id="cus_trial",
+            provider_customer_id="cust_trial",
             plan=Plan.PRO,
             status=SubscriptionStatus.TRIALING,
             trial_ends_at=utcnow() - timedelta(hours=1),
@@ -476,7 +476,7 @@ async def test_dunning_downgrades_only_after_the_grace_window(db: AsyncSession) 
     subscription = Subscription(
         id=new_id("sub"),
         user_id=user.id,
-        stripe_customer_id="cus_lapsed",
+        provider_customer_id="cust_lapsed",
         plan=Plan.PRO,
         status=SubscriptionStatus.PAST_DUE,
         past_due_since=utcnow() - timedelta(days=settings.dunning_grace_days - 1),

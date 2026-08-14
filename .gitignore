@@ -2,6 +2,11 @@
 __pycache__/
 *.py[cod]
 .env
+# Local variants hold the same live keys as `.env` itself — a hand-made copy, a
+# `.env.bak-…` kept across a provider swap, a `.env.local`. Only the checked-in
+# reference is exempt.
+.env.*
+!.env.example
 .pytest_cache/
 .ruff_cache/
 .mypy_cache/

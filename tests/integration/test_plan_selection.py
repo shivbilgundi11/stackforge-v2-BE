@@ -26,7 +26,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
 from app.core.database import utcnow
-from app.integrations import stripe as stripe_integration
+from app.integrations import razorpay as razorpay_integration
 from app.models.billing import Subscription, SubscriptionStatus
 from app.models.user import Plan, User
 from app.services import auth_service
@@ -38,33 +38,35 @@ SUBSCRIPTION = "/api/v1/billing/subscription"
 SELECTION = "/api/v1/billing/plan-selection"
 PLANS = "/api/v1/billing/plans"
 
-PRO_MONTHLY = "price_pro_monthly_test"
-TEAM_MONTHLY = "price_team_monthly_test"
+PRO_MONTHLY = "plan_pro_monthly_test"
+TEAM_MONTHLY = "plan_team_monthly_test"
 
 
-class _FakeStripe:
+class _FakeRazorpay:
     def __init__(self) -> None:
         self.checkouts: list[dict[str, Any]] = []
 
     async def create_customer(self, *, email: str, name: str, user_id: str) -> str:
-        return "cus_selection"
+        return "cust_selection"
 
-    async def create_checkout_session(self, **kwargs: Any) -> tuple[str, str]:
+    async def create_subscription(self, **kwargs: Any) -> tuple[str, str]:
         self.checkouts.append(kwargs)
-        return "cs_1", "https://checkout.stripe.test/cs_1"
+        return f"sub_{len(self.checkouts)}", "https://rzp.io/i/selection"
 
 
 @pytest.fixture
-def stripe(monkeypatch: pytest.MonkeyPatch) -> Iterator[_FakeStripe]:
-    monkeypatch.setattr(settings, "stripe_secret_key", "sk_test_fake")
-    monkeypatch.setattr(settings, "stripe_webhook_secret", "whsec_fake")
-    monkeypatch.setattr(settings, "stripe_price_pro_monthly", PRO_MONTHLY)
-    monkeypatch.setattr(settings, "stripe_price_team_monthly", TEAM_MONTHLY)
+def razorpay(monkeypatch: pytest.MonkeyPatch) -> Iterator[_FakeRazorpay]:
+    monkeypatch.setattr(settings, "razorpay_enabled", True)
+    monkeypatch.setattr(settings, "razorpay_key_id", "rzp_test_fake")
+    monkeypatch.setattr(settings, "razorpay_key_secret", "secret_fake")
+    monkeypatch.setattr(settings, "razorpay_webhook_secret", "whsec_fake")
+    monkeypatch.setattr(settings, "razorpay_plan_pro_monthly", PRO_MONTHLY)
+    monkeypatch.setattr(settings, "razorpay_plan_team_monthly", TEAM_MONTHLY)
 
-    fake = _FakeStripe()
-    stripe_integration.set_client(fake)
+    fake = _FakeRazorpay()
+    razorpay_integration.set_client(fake)
     yield fake
-    stripe_integration.set_client(None)
+    razorpay_integration.set_client(None)
 
 
 async def _register(client: AsyncClient, email: str, **extra: Any) -> None:
@@ -226,8 +228,8 @@ async def test_paying_clears_the_wall(client: AsyncClient, db: AsyncSession) -> 
     db.add(
         Subscription(
             user_id=user.id,
-            stripe_customer_id="cus_pays",
-            stripe_subscription_id="sub_pays",
+            provider_customer_id="cust_pays",
+            provider_subscription_id="sub_pays",
             plan=Plan.PRO,
             status=SubscriptionStatus.ACTIVE,
             seats=1,
@@ -254,8 +256,8 @@ async def test_a_better_plan_than_the_one_owed_also_settles_it(
     db.add(
         Subscription(
             user_id=user.id,
-            stripe_customer_id="cus_granted",
-            stripe_subscription_id="sub_granted",
+            provider_customer_id="cust_granted",
+            provider_subscription_id="sub_granted",
             plan=Plan.TEAM,
             status=SubscriptionStatus.ACTIVE,
             seats=5,
@@ -280,8 +282,8 @@ async def test_a_lesser_plan_does_not_settle_the_debt(
     db.add(
         Subscription(
             user_id=user.id,
-            stripe_customer_id="cus_partly",
-            stripe_subscription_id="sub_partly",
+            provider_customer_id="cust_partly",
+            provider_subscription_id="sub_partly",
             plan=Plan.PRO,
             status=SubscriptionStatus.ACTIVE,
             seats=1,
@@ -296,7 +298,7 @@ async def test_a_lesser_plan_does_not_settle_the_debt(
 
 
 async def test_an_abandoned_upgrade_does_not_grant_the_plan(
-    client: AsyncClient, db: AsyncSession, stripe: _FakeStripe
+    client: AsyncClient, db: AsyncSession, razorpay: _FakeRazorpay
 ) -> None:
     """The one that actually reached production behaviour in manual testing.
 
@@ -314,9 +316,9 @@ async def test_an_abandoned_upgrade_does_not_grant_the_plan(
     db.add(
         Subscription(
             user_id=user.id,
-            stripe_customer_id="cus_abandons",
-            stripe_subscription_id="sub_abandons",
-            stripe_price_id=settings.stripe_price_pro_monthly,
+            provider_customer_id="cust_abandons",
+            provider_subscription_id="sub_abandons",
+            provider_plan_id=settings.razorpay_plan_pro_monthly,
             plan=Plan.PRO,
             status=SubscriptionStatus.ACTIVE,
             seats=1,
@@ -338,7 +340,7 @@ async def test_an_abandoned_upgrade_does_not_grant_the_plan(
 
 
 async def test_an_abandoned_upgrade_can_be_retried(
-    client: AsyncClient, db: AsyncSession, stripe: _FakeStripe
+    client: AsyncClient, db: AsyncSession, razorpay: _FakeRazorpay
 ) -> None:
     """The other half of the same bug. With the intended plan written onto the
     row, the "already on this plan" guard compared against a plan the user was
@@ -352,9 +354,9 @@ async def test_an_abandoned_upgrade_can_be_retried(
     db.add(
         Subscription(
             user_id=user.id,
-            stripe_customer_id="cus_retries",
-            stripe_subscription_id="sub_retries",
-            stripe_price_id=settings.stripe_price_pro_monthly,
+            provider_customer_id="cust_retries",
+            provider_subscription_id="sub_retries",
+            provider_plan_id=settings.razorpay_plan_pro_monthly,
             plan=Plan.PRO,
             status=SubscriptionStatus.ACTIVE,
             seats=1,
@@ -366,12 +368,12 @@ async def test_an_abandoned_upgrade_can_be_retried(
     # Second attempt, same plan. Must be allowed.
     await billing_service.start_checkout(db, user, plan=Plan.TEAM, interval="monthly")
 
-    assert len(stripe.checkouts) == 2
-    assert stripe.checkouts[-1]["price_id"] == settings.stripe_price_team_monthly
+    assert len(razorpay.checkouts) == 2
+    assert razorpay.checkouts[-1]["plan_id"] == settings.razorpay_plan_team_monthly
 
 
 async def test_an_unpaid_row_is_still_repointed(
-    client: AsyncClient, db: AsyncSession, stripe: _FakeStripe
+    client: AsyncClient, db: AsyncSession, razorpay: _FakeRazorpay
 ) -> None:
     """The behaviour the reuse exists for, kept intact: an abandoned checkout
     that never became a subscription is a scratch row, and the next checkout
@@ -396,13 +398,14 @@ async def test_an_unpaid_row_is_still_repointed(
 
 
 async def test_the_wall_opens_checkout_on_the_plan_that_was_chosen(
-    client: AsyncClient, db: AsyncSession, stripe: _FakeStripe
+    client: AsyncClient, db: AsyncSession, razorpay: _FakeRazorpay
 ) -> None:
     """End to end, minus Stripe: choose at signup, pay at the wall."""
     await _register(client, "buys@example.com", plan="pro", interval="monthly")
     user = await _user(db, "buys@example.com")
     user.email_verified_at = utcnow()
     await db.flush()
+    user_id = user.id
     await _sign_in(client, "buys@example.com")
 
     summary = (await client.get(SUBSCRIPTION)).json()["data"]
@@ -411,12 +414,14 @@ async def test_the_wall_opens_checkout_on_the_plan_that_was_chosen(
         json={"plan": summary["pending_plan"], "interval": summary["pending_interval"]},
     )
     assert response.status_code == 200, response.text
-    assert response.json()["data"]["url"].startswith("https://checkout.stripe.test/")
+    assert response.json()["data"]["url"].startswith("https://rzp.io/")
 
-    assert stripe.checkouts[0]["price_id"] == PRO_MONTHLY
-    # The success redirect must not land on the dashboard: it races the
-    # webhook, and a browser that wins is bounced straight back to the wall.
-    assert "/checkout/done" in stripe.checkouts[0]["success_url"]
+    assert razorpay.checkouts[0]["plan_id"] == PRO_MONTHLY
+    # The account travels in `notes`, which Razorpay echoes on every
+    # subscription event — that is how a webhook attributes the subscription
+    # without racing the browser back to the return page. Razorpay has no
+    # success_url to assert on; the redirect is configured on the account.
+    assert razorpay.checkouts[0]["notes"] == {"user_id": user_id}
 
 
 # ── Dunning reaches the same wall ───────────────────────────────────────────
@@ -437,8 +442,8 @@ async def test_a_past_due_subscription_walls_only_after_the_grace_period(
 
     subscription = Subscription(
         user_id=user.id,
-        stripe_customer_id="cus_dunned",
-        stripe_subscription_id="sub_dunned",
+        provider_customer_id="cust_dunned",
+        provider_subscription_id="sub_dunned",
         plan=Plan.PRO,
         status=SubscriptionStatus.PAST_DUE,
         seats=1,
@@ -472,10 +477,10 @@ async def test_self_serve_does_not_depend_on_this_environment_having_prices(
     branch this asserts.
     """
     for field in (
-        "stripe_price_pro_monthly",
-        "stripe_price_pro_annual",
-        "stripe_price_team_monthly",
-        "stripe_price_team_annual",
+        "razorpay_plan_pro_monthly",
+        "razorpay_plan_pro_annual",
+        "razorpay_plan_team_monthly",
+        "razorpay_plan_team_annual",
     ):
         monkeypatch.setattr(settings, field, "")
 
@@ -492,7 +497,7 @@ async def test_self_serve_does_not_depend_on_this_environment_having_prices(
 
 
 async def test_a_priced_plan_is_buyable(
-    client: AsyncClient, stripe: _FakeStripe
+    client: AsyncClient, razorpay: _FakeRazorpay
 ) -> None:
     """The mirror, so the pair pins both directions rather than one."""
     rows = {row["key"]: row for row in (await client.get(PLANS)).json()["data"]}

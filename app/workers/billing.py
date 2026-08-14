@@ -1,14 +1,18 @@
 """Scheduled billing work (M20).
 
-Five jobs, and each exists because something in the lifecycle cannot be driven
+Six jobs, and each exists because something in the lifecycle cannot be driven
 by a request:
 
   * `retry_failed_events` — a webhook whose handler raised. Recorded, not lost;
     this is what picks it back up. Without it, "the failure is written down"
     would be a euphemism for "the customer paid and was never upgraded".
-  * `expire_trials` — a trial that ran out without a card. Stripe usually sends
-    the event; this is the backstop for the delivery that never arrived, and
-    the reason a missed webhook cannot leave someone on Pro indefinitely.
+  * `remind_expiring_trials` — three days before a trial ends. Stripe sent an
+    event for this and Razorpay does not, so what was a delivery is now a
+    query. A trial that ends silently is a downgrade the user experiences as
+    a bug.
+  * `expire_trials` — a trial that ran out without converting. The backstop
+    for a delivery that never arrived, and the reason a missed webhook cannot
+    leave someone on Pro indefinitely.
   * `close_dunning` — a payment that never recovered inside the grace window.
     The only place in this program that downgrades an account for money.
   * `reconcile_usage` — Redis against Postgres. Divergence is *logged*, never
@@ -44,8 +48,8 @@ from app.core.redis import Keys, get_redis
 from app.data.plans import Feature
 from app.integrations.email import send
 from app.models.billing import (
+    BillingEvent,
     Metric,
-    StripeEvent,
     Subscription,
     SubscriptionStatus,
     UsageRecord,
@@ -82,12 +86,12 @@ async def retry_failed_events(db: AsyncSession, *, limit: int = 50) -> int:
     leave the account in the wrong state.
     """
     stmt = (
-        select(StripeEvent)
+        select(BillingEvent)
         .where(
-            StripeEvent.processed_at.is_(None),
-            StripeEvent.attempts < MAX_EVENT_ATTEMPTS,
+            BillingEvent.processed_at.is_(None),
+            BillingEvent.attempts < MAX_EVENT_ATTEMPTS,
         )
-        .order_by(StripeEvent.received_at)
+        .order_by(BillingEvent.received_at)
         .limit(limit)
     )
     pending = (await db.execute(stmt)).scalars().all()
@@ -115,6 +119,57 @@ async def retry_failed_events(db: AsyncSession, *, limit: int = 50) -> int:
 
 
 # ── Lifecycle ───────────────────────────────────────────────────────────────
+
+
+async def remind_expiring_trials(db: AsyncSession, *, days_before: int = 3) -> int:
+    """Mail everyone whose trial ends in `days_before` days.
+
+    Stripe sent `customer.subscription.trial_will_end` on its own schedule;
+    Razorpay has no equivalent, so this asks the question instead of waiting to
+    be told. That is arguably the better shape anyway — a reminder that depends
+    on a third party's delivery is a reminder that silently stops.
+
+    Idempotent by window, not by flag: the query selects trials ending inside a
+    single day, and the cron runs daily, so a job that runs twice in one day
+    mails twice and a job that misses a day mails nobody. The second is the
+    failure worth avoiding, and `trial_reminder_sent_at` would be a column
+    earning its keep only if the schedule were less reliable than the mail.
+    """
+    from app.data import plans as plan_data
+    from app.services import email_templates
+
+    now = utcnow()
+    window_start = now + timedelta(days=days_before)
+    window_end = window_start + timedelta(days=1)
+
+    stmt = select(Subscription).where(
+        Subscription.status == SubscriptionStatus.TRIALING,
+        Subscription.trial_ends_at.is_not(None),
+        Subscription.trial_ends_at >= window_start,
+        Subscription.trial_ends_at < window_end,
+    )
+    ending = (await db.execute(stmt)).scalars().all()
+
+    sent = 0
+    for subscription in ending:
+        if subscription.user_id is None:
+            continue
+        user = await db.get(User, subscription.user_id)
+        if user is None:
+            continue
+        await send(
+            email_templates.trial_ending(
+                to=user.email,
+                name=user.name,
+                plan=plan_data.spec_for(subscription.plan).label,
+                ends_at=subscription.trial_ends_at,
+            )
+        )
+        sent += 1
+
+    if sent:
+        logger.info("billing.trial_reminders_sent", count=sent)
+    return sent
 
 
 async def expire_trials(db: AsyncSession) -> int:
@@ -145,7 +200,7 @@ async def expire_trials(db: AsyncSession) -> int:
 async def close_dunning(db: AsyncSession) -> int:
     """Downgrade the payments that never recovered.
 
-    The grace window is deliberately generous — Stripe is still retrying the
+    The grace window is deliberately generous — Razorpay is still retrying the
     card inside it, and cutting off a customer whose payment is one retry away
     costs more than the week of usage it saves.
     """
@@ -456,6 +511,7 @@ __all__ = [
     "close_dunning",
     "expire_trials",
     "reconcile_usage",
+    "remind_expiring_trials",
     "retry_failed_events",
     "send_deprecation_alerts",
     "send_price_change_alerts",

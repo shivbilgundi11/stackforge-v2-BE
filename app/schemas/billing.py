@@ -36,10 +36,10 @@ class PricingPlanOut(BaseModel):
     tagline: str
     #: Minor units. `null` on Enterprise, which has no self-serve price — a
     #: page that invented one would be lying.
-    monthly_cents: int | None
-    annual_cents: int | None
+    monthly_minor: int | None
+    annual_minor: int | None
     #: What annual billing saves against twelve monthly payments.
-    annual_saving_cents: int
+    annual_saving_minor: int
     currency: str
     per_seat: bool
     trial_days: int
@@ -110,10 +110,6 @@ class CheckoutOut(BaseModel):
     url: str
 
 
-class PortalOut(BaseModel):
-    url: str
-
-
 class InvoiceOut(BaseModel):
     id: str
     number: str | None
@@ -145,9 +141,9 @@ class SeatChangeOut(BaseModel):
 class WebhookOut(BaseModel):
     """Deliberately uninformative to the caller.
 
-    A webhook response is read by Stripe's retry logic and by anyone probing
+    A webhook response is read by Razorpay's retry logic and by anyone probing
     the endpoint. `received` is all either needs; whether an event applied,
-    was a duplicate, or failed is in the logs and the `stripe_events` table.
+    was a duplicate, or failed is in the logs and the `billing_events` table.
     """
 
     received: bool
@@ -160,7 +156,6 @@ __all__ = [
     "InvoiceOut",
     "PlanFeatureOut",
     "PlanLimitOut",
-    "PortalOut",
     "PricingPlanOut",
     "SubscriptionOut",
     "UsageSummaryOut",

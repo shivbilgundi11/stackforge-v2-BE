@@ -21,7 +21,7 @@ from app.core.errors import ValidationFailed
 from app.core.logging import get_logger
 from app.core.responses import Envelope, ok
 from app.data import plans as plan_data
-from app.integrations import stripe as stripe_integration
+from app.integrations import razorpay as razorpay_integration
 from app.models.billing import Metric, PlanQuota
 from app.models.user import Plan
 from app.schemas.billing import (
@@ -32,7 +32,6 @@ from app.schemas.billing import (
     PlanFeatureOut,
     PlanLimitOut,
     PlanSelectionIn,
-    PortalOut,
     PricingPlanOut,
     SeatChangeIn,
     SeatChangeOut,
@@ -87,9 +86,9 @@ async def list_plans(db: Db, identity: CallerIdentity) -> dict[str, Any]:
                 key=spec.plan.value,
                 label=spec.label,
                 tagline=spec.tagline,
-                monthly_cents=spec.monthly_cents,
-                annual_cents=spec.annual_cents,
-                annual_saving_cents=plan_data.annual_saving_cents(spec),
+                monthly_minor=spec.monthly_minor,
+                annual_minor=spec.annual_minor,
+                annual_saving_minor=plan_data.annual_saving_minor(spec),
                 currency=plan_data.CURRENCY,
                 per_seat=spec.per_seat,
                 trial_days=spec.trial_days,
@@ -124,7 +123,7 @@ async def list_plans(db: Db, identity: CallerIdentity) -> dict[str, Any]:
 
 
 def _has_price(plan: Plan) -> bool:
-    return any(billing_service.price_id_for(plan, interval) for interval in ("monthly", "annual"))
+    return any(billing_service.plan_id_for(plan, interval) for interval in ("monthly", "annual"))
 
 
 async def _limits_by_plan(db: AsyncSession) -> dict[Plan, dict[Metric, int | None]]:
@@ -209,9 +208,9 @@ async def create_checkout(db: Db, user: CurrentUser, payload: CheckoutIn) -> dic
     return ok(CheckoutOut(url=url))
 
 
-@router.post("/portal-session", response_model=Envelope[PortalOut], name="create_portal_session")
-async def create_portal_session(db: Db, user: CurrentUser) -> dict[str, Any]:
-    return ok(PortalOut(url=await billing_service.open_portal(db, user)))
+# `POST /portal-session` went with Stripe (D-50). Razorpay has no hosted
+# billing portal, and the two things the portal did are already here:
+# `GET /invoices` reads them live, and `POST /cancellation` is the button.
 
 
 @router.post("/cancellation", response_model=Envelope[SubscriptionOut], name="set_cancellation")
@@ -260,33 +259,45 @@ async def list_invoices(db: Db, user: CurrentUser) -> dict[str, Any]:
 # ── Webhook ─────────────────────────────────────────────────────────────────
 
 
-@router.post("/webhook", response_model=Envelope[WebhookOut], name="stripe_webhook")
-async def stripe_webhook(
+@router.post("/webhook", response_model=Envelope[WebhookOut], name="razorpay_webhook")
+async def razorpay_webhook(
     request: Request,
     db: Db,
-    stripe_signature: str | None = Header(default=None, alias="Stripe-Signature"),
+    razorpay_signature: str | None = Header(default=None, alias="X-Razorpay-Signature"),
+    razorpay_event_id: str | None = Header(default=None, alias="X-Razorpay-Event-Id"),
 ) -> dict[str, Any]:
     """The one endpoint authenticated by a signature rather than a session.
 
-    Reads the raw body, because the signature covers the exact bytes Stripe
+    Reads the raw body, because the signature covers the exact bytes Razorpay
     sent — re-serialising parsed JSON changes them and every delivery fails
     verification.
 
+    The event id comes from `X-Razorpay-Event-Id`, not the body. It is the
+    idempotency key, so a delivery without one is rejected rather than given a
+    generated id that would make every redelivery look new.
+
     Always answers 200 once the signature checks out, including when a handler
     raised. The failure is written onto the event row and retried by the
-    scheduled job; returning a 500 would ask Stripe to retry work that has
-    already been recorded, and after enough failures Stripe disables the
+    scheduled job; returning a 500 would ask Razorpay to retry work that has
+    already been recorded, and after enough failures a provider disables the
     endpoint entirely — which is a far worse state than a row with an error on
     it that a job will pick up in an hour.
     """
     body = await request.body()
-    event = stripe_integration.verify_signature(body, stripe_signature)
+    event = razorpay_integration.verify_signature(body, razorpay_signature)
 
-    record = await billing_service.record_event(db, event)
+    if not razorpay_event_id:
+        raise ValidationFailed("The webhook carried no event id.")
+
+    record = await billing_service.record_event(db, event, event_id=razorpay_event_id)
     if record is None:
         # A redelivery of something already applied. This is the case the whole
         # table exists for, and it is a normal, frequent, uninteresting one.
-        logger.info("billing.webhook_duplicate", event_id=event.get("id"), type=event.get("type"))
+        logger.info(
+            "billing.webhook_duplicate",
+            event_id=razorpay_event_id,
+            type=event.get("event"),
+        )
         return ok(WebhookOut(received=True))
 
     try:

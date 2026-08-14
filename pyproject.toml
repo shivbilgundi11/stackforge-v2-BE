@@ -58,10 +58,10 @@ dependencies = [
     "arq>=0.26",
     # M20. Same rule as the AI SDK: a hard dependency with an optional key. The
     # billing module has to import and degrade to "checkout unavailable" when
-    # STRIPE_SECRET_KEY is unset, because local development and CI both run
-    # without one — and the webhook signature verifier is needed even in the
-    # tests that never talk to Stripe.
-    "stripe>=11.4",
+    # the Razorpay keys are unset, because local development and CI both run
+    # without them — and the webhook signature verifier is needed even in the
+    # tests that never talk to Razorpay.
+    "razorpay>=2.0.1",
 ]
 
 [dependency-groups]
@@ -147,7 +147,17 @@ exclude = ["alembic/versions/"]
 # `playwright` is deliberately absent from the runtime dependencies — it is the
 # PDF worker image's, not the API's — so the import inside `pdf_service` is
 # unresolvable here by design rather than by omission.
-module = ["fakeredis.*", "uuid_extensions.*", "asgi_lifespan.*", "playwright.*"]
+#
+# `razorpay` ships no `py.typed`, which is why `integrations/razorpay.py`
+# declares a narrow Protocol over it: the boundary is typed even though the SDK
+# behind it is not, so nothing untyped escapes past that module.
+module = [
+    "fakeredis.*",
+    "uuid_extensions.*",
+    "asgi_lifespan.*",
+    "playwright.*",
+    "razorpay.*",
+]
 ignore_missing_imports = true
 
 # ---------------------------------------------------------------------------

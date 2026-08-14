@@ -1,4 +1,4 @@
-"""Subscriptions, quotas, usage, and the Stripe event log (M20).
+"""Subscriptions, quotas, usage, and the billing event log (M20).
 
 Four tables, and the interesting decisions are in the last three.
 
@@ -15,11 +15,11 @@ answered from. They are reconciled nightly, and a divergence is logged rather
 than silently corrected, because a drift means the metering is wrong and that
 should not be discovered from a customer's invoice.
 
-**`stripe_events.id` is the Stripe event id, and it is the primary key.** That
-is the whole idempotency design: insert first, process second. Stripe retries
-deliveries, and a duplicate that re-applies a plan change would upgrade someone
-twice or downgrade them mid-period. A duplicate here hits the primary key and
-is skipped before any handler runs.
+**`billing_events.id` is the provider's event id, and it is the primary key.**
+That is the whole idempotency design: insert first, process second. Payment
+providers retry deliveries, and a duplicate that re-applies a plan change would
+upgrade someone twice or downgrade them mid-period. A duplicate here hits the
+primary key and is skipped before any handler runs.
 """
 
 from __future__ import annotations
@@ -48,9 +48,12 @@ from app.models.user import Plan
 
 
 class SubscriptionStatus(str, enum.Enum):
-    """Mirrors Stripe's own vocabulary, minus the states this product cannot
-    reach. Using their words means a webhook handler never has to maintain a
-    translation table that drifts when Stripe adds a state."""
+    """The five states this product reasons about.
+
+    Deliberately fewer than any provider's own vocabulary — Razorpay alone has
+    nine — because the extra ones all collapse into one of these for every
+    decision the product makes. The mapping lives in `billing_service`, in one
+    dictionary, rather than spreading a provider's words through the app."""
 
     TRIALING = "trialing"
     ACTIVE = "active"
@@ -118,14 +121,14 @@ class Subscription(Base, TimestampMixin):
         String(64), ForeignKey("organizations.id", ondelete="CASCADE")
     )
 
-    #: The Stripe customer outlives any single subscription — a user who
-    #: cancels and resubscribes six months later must land on the same customer
+    #: The provider's customer record outlives any single subscription — a user
+    #: who cancels and resubscribes six months later must land on the same
     #: record, or their invoice history splits in two.
-    stripe_customer_id: Mapped[str] = mapped_column(String(80), nullable=False)
-    stripe_subscription_id: Mapped[str | None] = mapped_column(String(80), unique=True)
-    #: Which price this subscription is on, so a plan change can be detected by
+    provider_customer_id: Mapped[str] = mapped_column(String(80), nullable=False)
+    provider_subscription_id: Mapped[str | None] = mapped_column(String(80), unique=True)
+    #: Which plan this subscription is on, so a plan change can be detected by
     #: comparing against configuration rather than by trusting the event order.
-    stripe_price_id: Mapped[str | None] = mapped_column(String(80))
+    provider_plan_id: Mapped[str | None] = mapped_column(String(80))
 
     plan: Mapped[Plan] = mapped_column(
         Enum(Plan, name="plan", values_callable=lambda e: [m.value for m in e], create_type=False),
@@ -175,7 +178,7 @@ class Subscription(Base, TimestampMixin):
             unique=True,
             postgresql_where=text("organization_id IS NOT NULL AND status <> 'canceled'"),
         ),
-        Index("ix_subscriptions_stripe_customer_id", "stripe_customer_id"),
+        Index("ix_subscriptions_provider_customer_id", "provider_customer_id"),
         Index(
             "ix_subscriptions_trial_ends_at",
             "trial_ends_at",
@@ -301,7 +304,7 @@ class UsageRecord(Base):
     )
 
 
-class StripeEvent(Base):
+class BillingEvent(Base):
     """The idempotency ledger.
 
     Rows are never deleted by the app. A processed event is the evidence that a
@@ -309,10 +312,11 @@ class StripeEvent(Base):
     redelivered month-old event look new.
     """
 
-    __tablename__ = "stripe_events"
+    __tablename__ = "billing_events"
 
-    #: Stripe's `evt_…` id. This *is* the idempotency key — hence a natural
-    #: primary key rather than a generated one with a unique index beside it.
+    #: The provider's own event id. This *is* the idempotency key — hence a
+    #: natural primary key rather than a generated one with a unique index
+    #: beside it.
     id: Mapped[str] = mapped_column(String(80), primary_key=True)
 
     type: Mapped[str] = mapped_column(String(80), nullable=False)
@@ -331,7 +335,7 @@ class StripeEvent(Base):
 
     __table_args__ = (
         Index(
-            "ix_stripe_events_unprocessed",
+            "ix_billing_events_unprocessed",
             "received_at",
             postgresql_where=text("processed_at IS NULL"),
         ),
@@ -339,9 +343,9 @@ class StripeEvent(Base):
 
 
 __all__ = [
+    "BillingEvent",
     "Metric",
     "PlanQuota",
-    "StripeEvent",
     "Subscription",
     "SubscriptionStatus",
     "UsageRecord",

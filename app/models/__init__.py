@@ -18,9 +18,9 @@ from app.models.auth import (
     TokenPurpose,
 )
 from app.models.billing import (
+    BillingEvent,
     Metric,
     PlanQuota,
-    StripeEvent,
     Subscription,
     SubscriptionStatus,
     UsageRecord,
@@ -75,6 +75,7 @@ __all__ = [
     "AuthEventType",
     "AuthOutcome",
     "AuthToken",
+    "BillingEvent",
     "CatalogFlag",
     "Comment",
     "Compatibility",
@@ -110,7 +111,6 @@ __all__ = [
     "SourceType",
     "Stack",
     "StackVersion",
-    "StripeEvent",
     "Subscription",
     "SubscriptionStatus",
     "TeamResourceType",

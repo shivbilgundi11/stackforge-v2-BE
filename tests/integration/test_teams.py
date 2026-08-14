@@ -6,7 +6,7 @@ by endpoint; isolation asserts that another organization's id behaves exactly
 like an id that does not exist. Everything else — invitation paths, seats,
 threads, approvals — is the module's behaviour on top of those two guarantees.
 
-No test talks to Stripe; the seat-change test installs a fake that records the
+No test talks to Razorpay; the seat-change test installs a fake that records the
 quantity it was asked for. Invitation tokens are read out of the email outbox
 the way a recipient would read them.
 """
@@ -26,7 +26,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import utcnow
 from app.integrations import email as email_integration
-from app.integrations import stripe as stripe_integration
+from app.integrations import razorpay as razorpay_integration
 from app.models.billing import Metric, Subscription, SubscriptionStatus
 from app.models.organization import (
     Invitation,
@@ -496,44 +496,48 @@ async def test_seat_limits_at_send_and_accept(
     assert response.status_code == 402
 
 
-class _SeatStripe:
+class _SeatRazorpay:
     """Only what the seat test needs to observe."""
 
     def __init__(self) -> None:
         self.quantities: list[dict[str, Any]] = []
 
     async def create_customer(self, **kwargs: Any) -> str:
-        return "cus_seat"
+        return "cust_seat"
 
-    async def create_checkout_session(self, **kwargs: Any) -> tuple[str, str]:
-        return "cs_seat", "https://checkout.stripe.test/cs_seat"
+    async def create_subscription(self, **kwargs: Any) -> tuple[str, str]:
+        return "sub_seat_1", "https://rzp.io/i/seat"
 
-    async def create_portal_session(self, **kwargs: Any) -> str:
-        return "https://portal.stripe.test/seat"
+    async def fetch_subscription(self, **kwargs: Any) -> dict[str, Any]:
+        return {}
 
     async def list_invoices(self, **kwargs: Any) -> list[dict[str, Any]]:
         return []
 
-    async def cancel_at_period_end(self, **kwargs: Any) -> None:
-        return None
+    async def cancel_subscription(self, **kwargs: Any) -> dict[str, Any]:
+        return {}
 
-    async def update_subscription_quantity(self, **kwargs: Any) -> None:
+    async def cancel_scheduled_changes(self, **kwargs: Any) -> dict[str, Any]:
+        return {}
+
+    async def update_subscription_quantity(self, **kwargs: Any) -> dict[str, Any]:
         self.quantities.append(kwargs)
+        return {}
 
 
 @pytest.fixture
-def seat_stripe() -> Iterator[_SeatStripe]:
-    fake = _SeatStripe()
-    stripe_integration.set_client(fake)
+def seat_razorpay() -> Iterator[_SeatRazorpay]:
+    fake = _SeatRazorpay()
+    razorpay_integration.set_client(fake)
     yield fake
-    stripe_integration.set_client(None)
+    razorpay_integration.set_client(None)
 
 
-async def test_seat_change_adjusts_stripe_quantity(
+async def test_seat_change_adjusts_provider_quantity(
     client: AsyncClient,
     db: AsyncSession,
     outbox: email_integration.ConsoleSender,
-    seat_stripe: _SeatStripe,
+    seat_razorpay: _SeatRazorpay,
 ) -> None:
     _, owner_token = await _actor(client, db, "buyer@example.com", plan=Plan.TEAM)
     org = await _create_org(client, "Paying Team")
@@ -541,8 +545,8 @@ async def test_seat_change_adjusts_stripe_quantity(
     db.add(
         Subscription(
             organization_id=org["id"],
-            stripe_customer_id="cus_seat",
-            stripe_subscription_id="sub_seat_1",
+            provider_customer_id="cust_seat",
+            provider_subscription_id="sub_seat_1",
             plan=Plan.TEAM,
             status=SubscriptionStatus.ACTIVE,
             seats=5,
@@ -553,7 +557,7 @@ async def test_seat_change_adjusts_stripe_quantity(
     response = await client.post("/api/v1/billing/seats", json={"seats": 7})
     assert response.status_code == 200, response.text
     assert response.json()["data"] == {"seats": 7, "used": 1}
-    assert seat_stripe.quantities == [{"subscription_id": "sub_seat_1", "quantity": 7}]
+    assert seat_razorpay.quantities == [{"subscription_id": "sub_seat_1", "quantity": 7}]
 
     subscription = await db.scalar(
         select(Subscription).where(Subscription.organization_id == org["id"])

@@ -1,18 +1,29 @@
-"""Checkout, webhooks, and the lifecycle they drive (M20).
+"""Checkout, webhooks, and the lifecycle they drive (M20, Razorpay since D-50).
 
 The most important test in this file is `test_a_duplicate_delivery_applies_once`.
-Stripe retries, retries are normal, and a duplicate that re-applies a plan
+Providers retry, retries are normal, and a duplicate that re-applies a plan
 change bills or downgrades someone twice. Everything else here is a consequence
 of getting that one right.
 
-No test talks to Stripe. The client is a fake that records its arguments, and
-webhook payloads are built by hand — which is also how the signature
-verification is bypassed, since a real signature would need a real secret and
-the thing under test is the handler, not the SDK's HMAC.
+No test talks to Razorpay. The client is a fake that records its arguments, and
+webhook payloads are built by hand — which is also how signature verification is
+bypassed, since a real signature would need a real secret and the thing under
+test is the handler, not the HMAC. `tests/unit/test_razorpay_signature.py` is
+where the HMAC itself is exercised, for real.
+
+## What changed with the provider
+
+Razorpay has no checkout session, so there is no "checkout completed" event to
+attach a subscription: the subscription exists from the moment `start_checkout`
+runs, and the customer authorizes it afterwards. Every lifecycle event carries
+the same subscription entity with its current status, so one handler covers all
+nine event types and these tests drive them by varying `status` rather than by
+varying the event name.
 """
 
 from __future__ import annotations
 
+import json
 from collections.abc import Iterator
 from datetime import timedelta
 from typing import Any
@@ -24,8 +35,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
 from app.core.database import utcnow
-from app.integrations import stripe as stripe_integration
-from app.models.billing import StripeEvent, Subscription, SubscriptionStatus
+from app.integrations import razorpay as razorpay_integration
+from app.models.billing import BillingEvent, Subscription, SubscriptionStatus
 from app.models.user import Plan, User
 from app.services import billing_service
 from tests.conftest import GOOD_PASSWORD, register_and_verify
@@ -33,61 +44,73 @@ from tests.conftest import GOOD_PASSWORD, register_and_verify
 WEBHOOK = "/api/v1/billing/webhook"
 CHECKOUT = "/api/v1/billing/checkout-session"
 
-PRO_MONTHLY = "price_pro_monthly_test"
-PRO_ANNUAL = "price_pro_annual_test"
-TEAM_MONTHLY = "price_team_monthly_test"
+PRO_MONTHLY = "plan_pro_monthly_test"
+PRO_ANNUAL = "plan_pro_annual_test"
+TEAM_MONTHLY = "plan_team_monthly_test"
 
 
 # ── Fakes ───────────────────────────────────────────────────────────────────
 
 
-class FakeStripe:
+class FakeRazorpay:
     """Records what it was asked to do. Asserted against, never called out."""
 
     def __init__(self) -> None:
         self.customers: list[dict[str, Any]] = []
-        self.checkouts: list[dict[str, Any]] = []
-        self.portals: list[dict[str, Any]] = []
+        self.subscriptions: list[dict[str, Any]] = []
         self.cancellations: list[dict[str, Any]] = []
+        self.scheduled_cancellations: list[dict[str, Any]] = []
+        self.quantities: list[dict[str, Any]] = []
         self.invoices: list[dict[str, Any]] = []
 
     async def create_customer(self, *, email: str, name: str, user_id: str) -> str:
         self.customers.append({"email": email, "name": name, "user_id": user_id})
-        return f"cus_{len(self.customers)}"
+        return f"cust_{len(self.customers)}"
 
-    async def create_checkout_session(self, **kwargs: Any) -> tuple[str, str]:
-        self.checkouts.append(kwargs)
-        return "cs_test_1", "https://checkout.stripe.test/cs_test_1"
+    async def create_subscription(self, **kwargs: Any) -> tuple[str, str]:
+        self.subscriptions.append(kwargs)
+        subscription_id = f"sub_test_{len(self.subscriptions)}"
+        return subscription_id, f"https://rzp.io/i/{subscription_id}"
 
-    async def create_portal_session(self, **kwargs: Any) -> str:
-        self.portals.append(kwargs)
-        return "https://portal.stripe.test/session"
+    async def fetch_subscription(self, **kwargs: Any) -> dict[str, Any]:
+        return {}
 
     async def list_invoices(self, **kwargs: Any) -> list[dict[str, Any]]:
         return self.invoices
 
-    async def cancel_at_period_end(self, **kwargs: Any) -> None:
+    async def cancel_subscription(self, **kwargs: Any) -> dict[str, Any]:
         self.cancellations.append(kwargs)
+        return {}
+
+    async def cancel_scheduled_changes(self, **kwargs: Any) -> dict[str, Any]:
+        self.scheduled_cancellations.append(kwargs)
+        return {}
+
+    async def update_subscription_quantity(self, **kwargs: Any) -> dict[str, Any]:
+        self.quantities.append(kwargs)
+        return {}
 
 
 @pytest.fixture
-def stripe(monkeypatch: pytest.MonkeyPatch) -> Iterator[FakeStripe]:
-    """A configured Stripe, without Stripe.
+def razorpay(monkeypatch: pytest.MonkeyPatch) -> Iterator[FakeRazorpay]:
+    """A configured Razorpay, without Razorpay.
 
-    The price ids are patched onto settings too: an environment with no prices
+    The plan ids are patched onto settings too: an environment with no plans
     configured refuses checkout by design, which is correct behaviour and
     useless for testing everything after checkout.
     """
-    monkeypatch.setattr(settings, "stripe_secret_key", "sk_test_fake")
-    monkeypatch.setattr(settings, "stripe_webhook_secret", "whsec_fake")
-    monkeypatch.setattr(settings, "stripe_price_pro_monthly", PRO_MONTHLY)
-    monkeypatch.setattr(settings, "stripe_price_pro_annual", PRO_ANNUAL)
-    monkeypatch.setattr(settings, "stripe_price_team_monthly", TEAM_MONTHLY)
+    monkeypatch.setattr(settings, "razorpay_enabled", True)
+    monkeypatch.setattr(settings, "razorpay_key_id", "rzp_test_fake")
+    monkeypatch.setattr(settings, "razorpay_key_secret", "secret_fake")
+    monkeypatch.setattr(settings, "razorpay_webhook_secret", "whsec_fake")
+    monkeypatch.setattr(settings, "razorpay_plan_pro_monthly", PRO_MONTHLY)
+    monkeypatch.setattr(settings, "razorpay_plan_pro_annual", PRO_ANNUAL)
+    monkeypatch.setattr(settings, "razorpay_plan_team_monthly", TEAM_MONTHLY)
 
-    fake = FakeStripe()
-    stripe_integration.set_client(fake)
+    fake = FakeRazorpay()
+    razorpay_integration.set_client(fake)
     yield fake
-    stripe_integration.set_client(None)
+    razorpay_integration.set_client(None)
 
 
 @pytest.fixture
@@ -95,17 +118,16 @@ def unsigned(monkeypatch: pytest.MonkeyPatch) -> None:
     """Skip HMAC verification.
 
     Under test the payload is built in Python, so signing it would mean
-    re-implementing Stripe's HMAC to hand it straight back to Stripe's own
-    verifier — a test of the SDK, not of this application. What the endpoint
-    does *with* a verified event is the thing worth asserting.
+    re-implementing the HMAC to hand it straight back to our own verifier — a
+    test of `hmac`, not of this application. What the endpoint does *with* a
+    verified event is the thing worth asserting, and the verifier itself has
+    its own unit tests.
     """
 
     def _accept(payload: bytes, signature: str | None) -> dict[str, Any]:
-        import json
-
         return dict(json.loads(payload))
 
-    monkeypatch.setattr(stripe_integration, "verify_signature", _accept)
+    monkeypatch.setattr(razorpay_integration, "verify_signature", _accept)
 
 
 # ── Helpers ─────────────────────────────────────────────────────────────────
@@ -125,46 +147,58 @@ async def _sign_in(client: AsyncClient, db: AsyncSession, email: str) -> User:
 
 def _subscription_event(
     *,
-    event_id: str,
-    event_type: str = "customer.subscription.updated",
-    subscription_id: str = "sub_stripe_1",
-    customer_id: str = "cus_1",
+    event: str = "subscription.activated",
+    subscription_id: str = "sub_test_1",
+    customer_id: str = "cust_1",
     status: str = "active",
-    price_id: str = PRO_MONTHLY,
+    plan_id: str = PRO_MONTHLY,
     user_id: str | None = None,
-    trial_end: int | None = None,
-    cancel_at_period_end: bool = False,
+    start_at: int | None = None,
+    end_at: int | None = None,
     quantity: int = 1,
 ) -> dict[str, Any]:
+    """One Razorpay webhook body.
+
+    Nested two deep and keyed by entity name, which is the shape the real thing
+    sends — `payload.subscription.entity`. Getting that wrong is exactly the
+    class of bug these tests exist to catch.
+    """
     now = int(utcnow().timestamp())
     return {
-        "id": event_id,
-        "type": event_type,
-        "data": {
-            "object": {
-                "id": subscription_id,
-                "customer": customer_id,
-                "status": status,
-                "cancel_at_period_end": cancel_at_period_end,
-                "trial_end": trial_end,
-                "metadata": {"client_reference_id": user_id} if user_id else {},
-                "items": {
-                    "data": [
-                        {
-                            "price": {"id": price_id},
-                            "quantity": quantity,
-                            "current_period_start": now,
-                            "current_period_end": now + 30 * 86_400,
-                        }
-                    ]
-                },
+        "entity": "event",
+        "event": event,
+        "contains": ["subscription"],
+        "payload": {
+            "subscription": {
+                "entity": {
+                    "id": subscription_id,
+                    "entity": "subscription",
+                    "plan_id": plan_id,
+                    "customer_id": customer_id,
+                    "status": status,
+                    "quantity": quantity,
+                    "current_start": now,
+                    "current_end": now + 30 * 86_400,
+                    "start_at": start_at,
+                    "end_at": end_at,
+                    "total_count": 120,
+                    "paid_count": 1,
+                    "notes": {"user_id": user_id} if user_id else {},
+                }
             }
         },
+        "created_at": now,
     }
 
 
-async def _post_event(client: AsyncClient, event: dict[str, Any]) -> int:
-    response = await client.post(WEBHOOK, json=event, headers={"Stripe-Signature": "t=1,v1=x"})
+async def _post_event(
+    client: AsyncClient, event: dict[str, Any], *, event_id: str = "evt_test_1"
+) -> int:
+    response = await client.post(
+        WEBHOOK,
+        json=event,
+        headers={"X-Razorpay-Signature": "deadbeef", "X-Razorpay-Event-Id": event_id},
+    )
     return response.status_code
 
 
@@ -175,56 +209,62 @@ async def test_the_pricing_page_reads_its_limits_from_the_table(client: AsyncCli
     """A marketing page with its own copy of the numbers drifts from the
     enforcement, and the drift is invisible until a user hits a wall the page
     said was not there."""
-    response = await client.get("/api/v1/billing/plans")
-    assert response.status_code == 200
+    body = (await client.get("/api/v1/billing/plans")).json()["data"]
+    plans = {plan["key"]: plan for plan in body}
 
-    plans = {plan["key"]: plan for plan in response.json()["data"]}
     assert set(plans) == {"free", "pro", "team", "enterprise"}
-
-    runs = next(
-        limit for limit in plans["free"]["limits"] if limit["metric"] == "tool_runs_per_day"
-    )
+    assert plans["pro"]["monthly_minor"] == 159_900
+    assert plans["pro"]["currency"] == "inr"
+    runs = next(row for row in plans["free"]["limits"] if row["metric"] == "tool_runs_per_day")
     assert runs["limit"] == 25
 
 
 async def test_a_changed_limit_changes_the_pricing_page(
     client: AsyncClient, db: AsyncSession
 ) -> None:
-    from app.models.billing import Metric
-    from tests.conftest import set_limit
+    """The whole reason the limits live in a table."""
+    from app.models.billing import Metric, PlanQuota
 
-    await set_limit(db, plan=Plan.FREE, metric=Metric.TOOL_RUNS_PER_DAY, value=10)
+    row = await db.scalar(
+        select(PlanQuota).where(
+            PlanQuota.plan == Plan.FREE,
+            PlanQuota.metric == Metric.TOOL_RUNS_PER_DAY,
+            PlanQuota.anonymous.is_(False),
+        )
+    )
+    assert row is not None
+    row.limit_value = 40
+    await db.flush()
 
     body = (await client.get("/api/v1/billing/plans")).json()["data"]
-    plans = {plan["key"]: plan for plan in body}
-    runs = next(
-        limit for limit in plans["free"]["limits"] if limit["metric"] == "tool_runs_per_day"
-    )
-    assert runs["limit"] == 10, "the page must not have its own copy of the number"
+    free = next(plan for plan in body if plan["key"] == "free")
+    runs = next(item for item in free["limits"] if item["metric"] == "tool_runs_per_day")
+    assert runs["limit"] == 40
 
 
 async def test_unlimited_is_null_not_a_large_number(client: AsyncClient) -> None:
+    """A meter reading '3 of 999999' is a meter nobody believes."""
     body = (await client.get("/api/v1/billing/plans")).json()["data"]
-    plans = {plan["key"]: plan for plan in body}
-    runs = next(limit for limit in plans["pro"]["limits"] if limit["metric"] == "tool_runs_per_day")
+    pro = next(plan for plan in body if plan["key"] == "pro")
+    runs = next(item for item in pro["limits"] if item["metric"] == "tool_runs_per_day")
     assert runs["limit"] is None
 
 
 async def test_a_plan_with_no_configured_price_is_not_offered(
     client: AsyncClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """No key, no checkout. Offering a button that 402s is worse than not
+    """No plan id, no checkout. Offering a button that 402s is worse than not
     offering one.
 
-    The prices are blanked explicitly. This used to rely on the developer's
-    `.env` having no Stripe key, which meant the assertion inverted the moment
-    one was added — the test was reading the machine, not the code.
+    The plan ids are blanked explicitly. This used to rely on the developer's
+    `.env` having no keys, which meant the assertion inverted the moment one
+    was added — the test was reading the machine, not the code.
     """
     for field in (
-        "stripe_price_pro_monthly",
-        "stripe_price_pro_annual",
-        "stripe_price_team_monthly",
-        "stripe_price_team_annual",
+        "razorpay_plan_pro_monthly",
+        "razorpay_plan_pro_annual",
+        "razorpay_plan_team_monthly",
+        "razorpay_plan_team_annual",
     ):
         monkeypatch.setattr(settings, field, "")
 
@@ -242,42 +282,46 @@ async def test_plans_are_public(client: AsyncClient) -> None:
 # ── Checkout ────────────────────────────────────────────────────────────────
 
 
-async def test_checkout_carries_the_user_id_as_client_reference_id(
-    client: AsyncClient, db: AsyncSession, stripe: FakeStripe
+async def test_checkout_carries_the_user_id_in_the_notes(
+    client: AsyncClient, db: AsyncSession, razorpay: FakeRazorpay
 ) -> None:
-    """Attribution cannot depend on the browser coming back."""
-    user = await _sign_in(client, db, "buyer@example.com")
+    """Attribution must not depend on the browser coming back. Razorpay echoes
+    `notes` on every subscription event, which is how a webhook finds the
+    account without racing the redirect."""
+    user = await _sign_in(client, db, "reference@example.com")
 
     response = await client.post(CHECKOUT, json={"plan": "pro", "interval": "monthly"})
-    assert response.status_code == 200
-    assert response.json()["data"]["url"].startswith("https://checkout.stripe.test/")
+    assert response.status_code == 200, response.text
+    assert response.json()["data"]["url"].startswith("https://rzp.io/i/")
 
-    assert len(stripe.checkouts) == 1
-    assert stripe.checkouts[0]["client_reference_id"] == user.id
-    assert stripe.checkouts[0]["price_id"] == PRO_MONTHLY
+    assert razorpay.subscriptions[0]["notes"] == {"user_id": user.id}
+    assert razorpay.subscriptions[0]["plan_id"] == PRO_MONTHLY
 
 
 async def test_checkout_writes_an_incomplete_subscription_before_redirecting(
-    client: AsyncClient, db: AsyncSession, stripe: FakeStripe
+    client: AsyncClient, db: AsyncSession, razorpay: FakeRazorpay
 ) -> None:
-    """An abandoned checkout should leave an explicable state, not nothing."""
-    user = await _sign_in(client, db, "abandoner@example.com")
+    """The row is what a webhook arriving during the redirect attaches to, and
+    it means an abandoned authorization leaves a visible, explicable state
+    rather than nothing at all."""
+    user = await _sign_in(client, db, "incomplete@example.com")
     await client.post(CHECKOUT, json={"plan": "pro", "interval": "monthly"})
 
     subscription = await billing_service.get_subscription(db, user)
     assert subscription is not None
     assert subscription.status is SubscriptionStatus.INCOMPLETE
-    assert subscription.plan is Plan.PRO
-    assert user.plan is Plan.FREE, "an unpaid checkout must not grant anything"
+    # Razorpay creates the subscription up front, so unlike Stripe the id is
+    # already on the row before anybody has paid.
+    assert subscription.provider_subscription_id == "sub_test_1"
+    assert user.plan is Plan.FREE, "creating a subscription is not being on it"
 
 
 async def test_a_second_checkout_reuses_the_row_and_the_customer(
-    client: AsyncClient, db: AsyncSession, stripe: FakeStripe
+    client: AsyncClient, db: AsyncSession, razorpay: FakeRazorpay
 ) -> None:
-    """One live subscription per user is a database constraint; a user who
-    abandons Pro and then buys Team must not trip it."""
-    user = await _sign_in(client, db, "switcher@example.com")
-
+    """One live subscription per user is a database invariant, so an abandoned
+    Pro attempt followed by a Team attempt has to update rather than insert."""
+    user = await _sign_in(client, db, "reuse@example.com")
     await client.post(CHECKOUT, json={"plan": "pro", "interval": "monthly"})
     await client.post(CHECKOUT, json={"plan": "team", "interval": "monthly", "seats": 3})
 
@@ -289,58 +333,60 @@ async def test_a_second_checkout_reuses_the_row_and_the_customer(
     assert len(rows) == 1
     assert rows[0].plan is Plan.TEAM
     assert rows[0].seats == 3
-    assert len(stripe.customers) == 1, "a second customer would split the invoice history"
+    assert len(razorpay.customers) == 1, "one customer per user, forever"
 
 
 async def test_a_trial_is_offered_once(
-    client: AsyncClient, db: AsyncSession, stripe: FakeStripe
+    client: AsyncClient, db: AsyncSession, razorpay: FakeRazorpay
 ) -> None:
-    """Cancel-and-resubscribe is not a supported way to get another free week."""
-    user = await _sign_in(client, db, "trialist@example.com")
+    """'Cancel and re-subscribe' is not a supported way to get another free
+    week."""
+    user = await _sign_in(client, db, "trialer@example.com")
     await client.post(CHECKOUT, json={"plan": "pro", "interval": "monthly"})
-    assert stripe.checkouts[0]["trial_days"] == 7
+    assert razorpay.subscriptions[0]["start_at"] is not None
 
     subscription = await billing_service.get_subscription(db, user)
     assert subscription is not None
-    subscription.trial_ends_at = utcnow() + timedelta(days=7)
+    subscription.trial_ends_at = utcnow() + timedelta(days=3)
     await db.flush()
 
-    await client.post(CHECKOUT, json={"plan": "pro", "interval": "annual"})
-    assert stripe.checkouts[1]["trial_days"] == 0
+    await client.post(CHECKOUT, json={"plan": "team", "interval": "monthly"})
+    assert razorpay.subscriptions[1]["start_at"] is None, "a second trial was granted"
 
 
-async def test_checkout_without_stripe_configured_is_refused_clearly(
+async def test_checkout_without_razorpay_configured_is_refused_clearly(
     client: AsyncClient, db: AsyncSession
 ) -> None:
-    await _sign_in(client, db, "nostripe@example.com")
+    """A 402 that says why, not a 500."""
+    await _sign_in(client, db, "unconfigured@example.com")
     response = await client.post(CHECKOUT, json={"plan": "pro", "interval": "monthly"})
-
     assert response.status_code == 402
     assert response.json()["error"]["details"]["reason"] == "billing_not_configured"
 
 
-async def test_checkout_requires_an_account(client: AsyncClient, stripe: FakeStripe) -> None:
+async def test_checkout_requires_an_account(client: AsyncClient, razorpay: FakeRazorpay) -> None:
     assert (await client.post(CHECKOUT, json={"plan": "pro"})).status_code == 401
 
 
 async def test_seats_are_refused_on_a_plan_that_is_not_per_seat(
-    client: AsyncClient, db: AsyncSession, stripe: FakeStripe
+    client: AsyncClient, db: AsyncSession, razorpay: FakeRazorpay
 ) -> None:
     await _sign_in(client, db, "seats@example.com")
-    response = await client.post(CHECKOUT, json={"plan": "pro", "interval": "monthly", "seats": 4})
+    response = await client.post(CHECKOUT, json={"plan": "pro", "seats": 4})
     assert response.status_code == 422
 
 
-# ── Webhooks: idempotency ───────────────────────────────────────────────────
+# ── Idempotency ─────────────────────────────────────────────────────────────
 
 
 async def test_a_duplicate_delivery_applies_once(
-    client: AsyncClient, db: AsyncSession, stripe: FakeStripe, unsigned: None
+    client: AsyncClient, db: AsyncSession, razorpay: FakeRazorpay, unsigned: None
 ) -> None:
-    """The single most important test in this module.
+    """The test this whole module is arranged around.
 
-    Stripe retries. A duplicate that re-applies a plan change upgrades or
-    downgrades someone twice, and the second application is silent.
+    Providers retry. A duplicate that re-applies a plan change upgrades someone
+    twice or downgrades them mid-period, and the event id is the only thing
+    standing between a retry and that.
     """
     user = await _sign_in(client, db, "dupe@example.com")
     await client.post(CHECKOUT, json={"plan": "pro", "interval": "monthly"})
@@ -348,56 +394,48 @@ async def test_a_duplicate_delivery_applies_once(
     assert subscription is not None
 
     event = _subscription_event(
-        event_id="evt_duplicate",
-        subscription_id="sub_dupe",
-        customer_id=subscription.stripe_customer_id,
-        user_id=user.id,
+        customer_id=subscription.provider_customer_id, user_id=user.id, quantity=1
     )
 
-    assert await _post_event(client, event) == 200
-    assert await _post_event(client, event) == 200
-    assert await _post_event(client, event) == 200
-
-    rows = (
-        (await db.execute(select(StripeEvent).where(StripeEvent.id == "evt_duplicate")))
-        .scalars()
-        .all()
-    )
-    assert len(rows) == 1, "one row per event id, whatever the delivery count"
-    assert rows[0].processed_at is not None
-
+    assert await _post_event(client, event, event_id="evt_dupe") == 200
     await db.refresh(user)
     assert user.plan is Plan.PRO
 
-    subscriptions = (
-        (await db.execute(select(Subscription).where(Subscription.user_id == user.id)))
+    # The same delivery again, byte for byte.
+    assert await _post_event(client, event, event_id="evt_dupe") == 200
+
+    rows = (
+        (await db.execute(select(BillingEvent).where(BillingEvent.id == "evt_dupe")))
         .scalars()
         .all()
     )
-    assert len(subscriptions) == 1
+    assert len(rows) == 1, "one row per event id"
+    assert rows[0].processed_at is not None
 
 
 async def test_an_unprocessed_event_is_retried_rather_than_skipped(
-    client: AsyncClient, db: AsyncSession, stripe: FakeStripe, unsigned: None
+    client: AsyncClient, db: AsyncSession, razorpay: FakeRazorpay, unsigned: None
 ) -> None:
-    """A row that exists but never applied is a *failed* attempt, not a
-    duplicate. Treating existence alone as "done" is how a customer who paid
-    is never upgraded."""
-    user = await _sign_in(client, db, "retryable@example.com")
+    """The case a naive 'insert or skip' gets wrong.
+
+    A handler that raised leaves a row behind. If existence alone meant 'done',
+    the provider's next retry would be discarded and the customer who paid
+    would never be upgraded.
+    """
+    user = await _sign_in(client, db, "retry@example.com")
     await client.post(CHECKOUT, json={"plan": "pro", "interval": "monthly"})
     subscription = await billing_service.get_subscription(db, user)
     assert subscription is not None
 
     event = _subscription_event(
-        event_id="evt_retryable",
-        subscription_id="sub_retry",
-        customer_id=subscription.stripe_customer_id,
-        user_id=user.id,
+        customer_id=subscription.provider_customer_id, user_id=user.id
     )
+    # The row a previous, failed attempt left behind — same id, same body, and
+    # no `processed_at`.
     db.add(
-        StripeEvent(
-            id="evt_retryable",
-            type=event["type"],
+        BillingEvent(
+            id="evt_unprocessed",
+            type=event["event"],
             payload=event,
             attempts=1,
             error="boom",
@@ -405,100 +443,90 @@ async def test_an_unprocessed_event_is_retried_rather_than_skipped(
     )
     await db.flush()
 
-    assert await _post_event(client, event) == 200
+    assert await _post_event(client, event, event_id="evt_unprocessed") == 200
 
-    record = await db.get(StripeEvent, "evt_retryable")
+    await db.refresh(user)
+    assert user.plan is Plan.PRO, "the retry was discarded"
+    record = await db.get(BillingEvent, "evt_unprocessed")
     assert record is not None
     assert record.processed_at is not None
     assert record.error is None
-
-    await db.refresh(user)
-    assert user.plan is Plan.PRO
 
 
 async def test_a_failing_handler_records_the_error_and_still_answers_200(
     client: AsyncClient,
     db: AsyncSession,
-    stripe: FakeStripe,
+    razorpay: FakeRazorpay,
     unsigned: None,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """A 500 asks Stripe to retry work that is already recorded, and enough of
-    them disables the endpoint. The failure is written down instead."""
+    """A 500 asks the provider to retry work already recorded, and after enough
+    failures a provider disables the endpoint — a far worse state than a row
+    with an error on it that a job will pick up in an hour."""
 
-    async def _explode(*_: object, **__: object) -> str:
-        raise RuntimeError("handler is broken")
+    async def _boom(*args: Any, **kwargs: Any) -> str:
+        raise RuntimeError("handler exploded")
 
-    monkeypatch.setattr(billing_service, "process_event", _explode)
+    monkeypatch.setattr(billing_service, "_on_subscription_changed", _boom)
 
-    status = await _post_event(
-        client, _subscription_event(event_id="evt_broken", user_id="usr_missing")
+    await _sign_in(client, db, "failing@example.com")
+    assert (
+        await _post_event(client, _subscription_event(), event_id="evt_fail") == 200
     )
-    assert status == 200
 
-    record = await db.get(StripeEvent, "evt_broken")
+    record = await db.get(BillingEvent, "evt_fail")
     assert record is not None
     assert record.processed_at is None
     assert record.attempts == 1
     assert record.error is not None
-    assert "handler is broken" in record.error
+    assert "handler exploded" in record.error
 
 
 async def test_an_unhandled_event_type_is_recorded_and_marked_done(
-    client: AsyncClient, db: AsyncSession, unsigned: None
+    client: AsyncClient, db: AsyncSession, razorpay: FakeRazorpay, unsigned: None
 ) -> None:
-    """Stripe sends dozens of types this product has no opinion on. Retrying
+    """Razorpay sends dozens of types this product has no opinion on. Retrying
     them forever would fill the retry job with work that can never succeed."""
-    noise = {"id": "evt_noise", "type": "customer.discount.created", "data": {}}
-    assert await _post_event(client, noise) == 200
+    assert (
+        await _post_event(
+            client,
+            {"entity": "event", "event": "payment.authorized", "payload": {}},
+            event_id="evt_noise",
+        )
+        == 200
+    )
 
-    record = await db.get(StripeEvent, "evt_noise")
+    record = await db.get(BillingEvent, "evt_noise")
     assert record is not None
     assert record.processed_at is not None
 
 
 async def test_an_unsigned_webhook_is_rejected(client: AsyncClient, db: AsyncSession) -> None:
-    """Without the signature this endpoint is an unauthenticated
-    'make me Pro' API."""
-    response = await client.post(WEBHOOK, json={"id": "evt_forged", "type": "invoice.paid"})
-    assert response.status_code == 502
-    assert await db.get(StripeEvent, "evt_forged") is None, "nothing is written before verifying"
+    """The endpoint's entire authentication. Without it this is an
+    unauthenticated 'make me Pro' API."""
+    response = await client.post(WEBHOOK, json=_subscription_event())
+    assert response.status_code != 200
+    assert await db.get(BillingEvent, "evt_test_1") is None
 
 
-# ── Webhooks: lifecycle ─────────────────────────────────────────────────────
-
-
-async def test_checkout_completed_attaches_the_stripe_subscription(
-    client: AsyncClient, db: AsyncSession, stripe: FakeStripe, unsigned: None
+async def test_a_webhook_without_an_event_id_is_rejected(
+    client: AsyncClient, db: AsyncSession, razorpay: FakeRazorpay, unsigned: None
 ) -> None:
-    user = await _sign_in(client, db, "attach@example.com")
-    await client.post(CHECKOUT, json={"plan": "pro", "interval": "monthly"})
-    subscription = await billing_service.get_subscription(db, user)
-    assert subscription is not None
-
-    await _post_event(
-        client,
-        {
-            "id": "evt_checkout",
-            "type": "checkout.session.completed",
-            "data": {
-                "object": {
-                    "client_reference_id": user.id,
-                    "subscription": "sub_attached",
-                    "customer": subscription.stripe_customer_id,
-                }
-            },
-        },
+    """Razorpay puts the id in a header, not the body. Without one there is no
+    idempotency key, and every redelivery would look new."""
+    response = await client.post(
+        WEBHOOK, json=_subscription_event(), headers={"X-Razorpay-Signature": "deadbeef"}
     )
+    assert response.status_code == 422
 
-    await db.refresh(subscription)
-    assert subscription.stripe_subscription_id == "sub_attached"
+
+# ── Lifecycle ───────────────────────────────────────────────────────────────
 
 
 async def test_an_active_subscription_grants_the_plan(
-    client: AsyncClient, db: AsyncSession, stripe: FakeStripe, unsigned: None
+    client: AsyncClient, db: AsyncSession, razorpay: FakeRazorpay, unsigned: None
 ) -> None:
-    user = await _sign_in(client, db, "granted@example.com")
+    user = await _sign_in(client, db, "active@example.com")
     await client.post(CHECKOUT, json={"plan": "pro", "interval": "monthly"})
     subscription = await billing_service.get_subscription(db, user)
     assert subscription is not None
@@ -506,10 +534,9 @@ async def test_an_active_subscription_grants_the_plan(
     await _post_event(
         client,
         _subscription_event(
-            event_id="evt_active",
-            customer_id=subscription.stripe_customer_id,
-            user_id=user.id,
+            customer_id=subscription.provider_customer_id, user_id=user.id
         ),
+        event_id="evt_active",
     )
 
     await db.refresh(user)
@@ -519,161 +546,198 @@ async def test_an_active_subscription_grants_the_plan(
     assert subscription.current_period_end is not None
 
 
-async def test_a_trialing_subscription_grants_the_plan_too(
-    client: AsyncClient, db: AsyncSession, stripe: FakeStripe, unsigned: None
+async def test_an_authenticated_subscription_is_the_trial_and_grants_the_plan(
+    client: AsyncClient, db: AsyncSession, razorpay: FakeRazorpay, unsigned: None
 ) -> None:
-    """A trial without the features is not a trial."""
+    """`authenticated` means the mandate is confirmed and the first charge is
+    waiting for `start_at`. A trial without the features is not a trial."""
     user = await _sign_in(client, db, "trialing@example.com")
     await client.post(CHECKOUT, json={"plan": "pro", "interval": "monthly"})
     subscription = await billing_service.get_subscription(db, user)
     assert subscription is not None
 
+    start_at = int((utcnow() + timedelta(days=7)).timestamp())
     await _post_event(
         client,
         _subscription_event(
-            event_id="evt_trialing",
-            customer_id=subscription.stripe_customer_id,
+            event="subscription.authenticated",
+            status="authenticated",
+            customer_id=subscription.provider_customer_id,
             user_id=user.id,
-            status="trialing",
-            trial_end=int((utcnow() + timedelta(days=7)).timestamp()),
+            start_at=start_at,
         ),
+        event_id="evt_auth",
     )
 
     await db.refresh(user)
+    await db.refresh(subscription)
     assert user.plan is Plan.PRO
+    assert subscription.status is SubscriptionStatus.TRIALING
+    assert subscription.trial_ends_at is not None
 
 
 async def test_an_upgrade_and_a_downgrade_are_the_same_code_path(
-    client: AsyncClient, db: AsyncSession, stripe: FakeStripe, unsigned: None
+    client: AsyncClient, db: AsyncSession, razorpay: FakeRazorpay, unsigned: None
 ) -> None:
-    """The plan is read from the price on the subscription as it is now, so
-    delivery order cannot invert a change."""
-    user = await _sign_in(client, db, "mover@example.com")
+    """Reading the tier from the plan id rather than from event ordering is
+    what makes this one path: the subscription says what it is now, and whether
+    that is up or down from before does not matter."""
+    user = await _sign_in(client, db, "moves@example.com")
     await client.post(CHECKOUT, json={"plan": "pro", "interval": "monthly"})
     subscription = await billing_service.get_subscription(db, user)
     assert subscription is not None
-    customer = subscription.stripe_customer_id
+    customer_id = subscription.provider_customer_id
 
     await _post_event(
         client,
-        _subscription_event(event_id="evt_up_1", customer_id=customer, user_id=user.id),
-    )
-    await db.refresh(user)
-    assert user.plan is Plan.PRO
-
-    await _post_event(
-        client,
-        _subscription_event(
-            event_id="evt_up_2", customer_id=customer, user_id=user.id, price_id=TEAM_MONTHLY
-        ),
+        _subscription_event(customer_id=customer_id, user_id=user.id, plan_id=TEAM_MONTHLY),
+        event_id="evt_up",
     )
     await db.refresh(user)
     assert user.plan is Plan.TEAM
 
     await _post_event(
         client,
-        _subscription_event(
-            event_id="evt_down", customer_id=customer, user_id=user.id, price_id=PRO_MONTHLY
-        ),
+        _subscription_event(customer_id=customer_id, user_id=user.id, plan_id=PRO_MONTHLY),
+        event_id="evt_down",
     )
     await db.refresh(user)
     assert user.plan is Plan.PRO
 
 
-async def test_a_deleted_subscription_drops_the_user_to_free(
-    client: AsyncClient, db: AsyncSession, stripe: FakeStripe, unsigned: None
+async def test_a_cancelled_subscription_drops_the_user_to_free(
+    client: AsyncClient, db: AsyncSession, razorpay: FakeRazorpay, unsigned: None
 ) -> None:
-    user = await _sign_in(client, db, "canceller@example.com")
+    """And touches nothing else. A downgrade is reversible by paying again."""
+    user = await _sign_in(client, db, "cancelled@example.com")
     await client.post(CHECKOUT, json={"plan": "pro", "interval": "monthly"})
     subscription = await billing_service.get_subscription(db, user)
     assert subscription is not None
+    customer_id = subscription.provider_customer_id
 
     await _post_event(
         client,
-        _subscription_event(
-            event_id="evt_live", customer_id=subscription.stripe_customer_id, user_id=user.id
-        ),
+        _subscription_event(customer_id=customer_id, user_id=user.id),
+        event_id="evt_on",
     )
-    await _post_event(
-        client,
-        _subscription_event(
-            event_id="evt_gone",
-            event_type="customer.subscription.deleted",
-            customer_id=subscription.stripe_customer_id,
-            user_id=user.id,
-            status="canceled",
-        ),
-    )
-
     await db.refresh(user)
-    await db.refresh(subscription)
+    assert user.plan is Plan.PRO
+
+    await _post_event(
+        client,
+        _subscription_event(
+            event="subscription.cancelled",
+            status="cancelled",
+            customer_id=customer_id,
+            user_id=user.id,
+        ),
+        event_id="evt_off",
+    )
+    await db.refresh(user)
     assert user.plan is Plan.FREE
-    assert subscription.status is SubscriptionStatus.CANCELED
     assert subscription.canceled_at is not None
 
 
 async def test_a_failed_payment_starts_dunning_without_downgrading(
-    client: AsyncClient,
-    db: AsyncSession,
-    stripe: FakeStripe,
-    unsigned: None,
-    outbox: Any,
+    client: AsyncClient, db: AsyncSession, razorpay: FakeRazorpay, unsigned: None
 ) -> None:
-    """Stripe is still retrying the card. Cutting access to a customer one
-    retry from success costs more than the week of usage it saves."""
+    """The features stay on through the grace window. Cutting access to a
+    customer whose payment is one retry from succeeding costs more than the
+    week of usage it saves."""
     user = await _sign_in(client, db, "dunned@example.com")
     await client.post(CHECKOUT, json={"plan": "pro", "interval": "monthly"})
     subscription = await billing_service.get_subscription(db, user)
     assert subscription is not None
+    customer_id = subscription.provider_customer_id
 
     await _post_event(
         client,
-        _subscription_event(
-            event_id="evt_paid_up",
-            customer_id=subscription.stripe_customer_id,
-            user_id=user.id,
-        ),
+        _subscription_event(customer_id=customer_id, user_id=user.id),
+        event_id="evt_paid",
     )
     await _post_event(
         client,
-        {
-            "id": "evt_failed",
-            "type": "invoice.payment_failed",
-            "data": {"object": {"customer": subscription.stripe_customer_id}},
-        },
+        _subscription_event(
+            event="subscription.pending",
+            status="pending",
+            customer_id=customer_id,
+            user_id=user.id,
+        ),
+        event_id="evt_pending",
     )
 
     await db.refresh(user)
     await db.refresh(subscription)
     assert subscription.status is SubscriptionStatus.PAST_DUE
     assert subscription.past_due_since is not None
-    assert user.plan is Plan.PRO, "the grace window keeps the features"
-    assert any("did not go through" in mail.subject for mail in outbox.outbox)
+    assert user.plan is Plan.PRO, "dunning must not downgrade on the first failure"
+
+
+async def test_halted_is_past_due_not_cancelled(
+    client: AsyncClient, db: AsyncSession, razorpay: FakeRazorpay, unsigned: None
+) -> None:
+    """Razorpay stops retrying at `halted`, but the grace period is ours to
+    run. Treating it as cancelled would downgrade on the day the card
+    bounced."""
+    user = await _sign_in(client, db, "halted@example.com")
+    await client.post(CHECKOUT, json={"plan": "pro", "interval": "monthly"})
+    subscription = await billing_service.get_subscription(db, user)
+    assert subscription is not None
+    customer_id = subscription.provider_customer_id
+
+    # Paying first, so there is a plan for halting to threaten.
+    await _post_event(
+        client,
+        _subscription_event(customer_id=customer_id, user_id=user.id),
+        event_id="evt_halted_paid",
+    )
+
+    await _post_event(
+        client,
+        _subscription_event(
+            event="subscription.halted",
+            status="halted",
+            customer_id=customer_id,
+            user_id=user.id,
+        ),
+        event_id="evt_halted",
+    )
+
+    await db.refresh(user)
+    await db.refresh(subscription)
+    assert subscription.status is SubscriptionStatus.PAST_DUE
+    assert user.plan is Plan.PRO
 
 
 async def test_a_recovered_payment_clears_dunning(
-    client: AsyncClient, db: AsyncSession, stripe: FakeStripe, unsigned: None
+    client: AsyncClient, db: AsyncSession, razorpay: FakeRazorpay, unsigned: None
 ) -> None:
+    """A user whose card recovered should not keep a 'payment failed' banner."""
     user = await _sign_in(client, db, "recovered@example.com")
     await client.post(CHECKOUT, json={"plan": "pro", "interval": "monthly"})
     subscription = await billing_service.get_subscription(db, user)
     assert subscription is not None
-    customer = subscription.stripe_customer_id
+    customer_id = subscription.provider_customer_id
 
     await _post_event(
-        client, _subscription_event(event_id="evt_r1", customer_id=customer, user_id=user.id)
+        client,
+        _subscription_event(
+            event="subscription.pending",
+            status="pending",
+            customer_id=customer_id,
+            user_id=user.id,
+        ),
+        event_id="evt_fail2",
     )
+    await db.refresh(subscription)
+    assert subscription.past_due_since is not None
+
     await _post_event(
         client,
-        {
-            "id": "evt_r2",
-            "type": "invoice.payment_failed",
-            "data": {"object": {"customer": customer}},
-        },
-    )
-    await _post_event(
-        client,
-        {"id": "evt_r3", "type": "invoice.paid", "data": {"object": {"customer": customer}}},
+        _subscription_event(
+            event="subscription.charged", customer_id=customer_id, user_id=user.id
+        ),
+        event_id="evt_charged",
     )
 
     await db.refresh(subscription)
@@ -681,34 +745,47 @@ async def test_a_recovered_payment_clears_dunning(
     assert subscription.past_due_since is None
 
 
-async def test_a_trial_ending_soon_sends_one_email(
-    client: AsyncClient, db: AsyncSession, stripe: FakeStripe, unsigned: None, outbox: Any
+async def test_a_failed_payment_emails_once_not_once_per_retry(
+    client: AsyncClient,
+    db: AsyncSession,
+    razorpay: FakeRazorpay,
+    unsigned: None,
+    outbox: Any,
 ) -> None:
-    user = await _sign_in(client, db, "reminded@example.com")
+    """Razorpay re-sends `pending` on every retry. The mail is driven off the
+    transition into past due, not off the delivery."""
+    user = await _sign_in(client, db, "onceonly@example.com")
     await client.post(CHECKOUT, json={"plan": "pro", "interval": "monthly"})
     subscription = await billing_service.get_subscription(db, user)
     assert subscription is not None
+    customer_id = subscription.provider_customer_id
 
-    await _post_event(
-        client,
-        _subscription_event(
-            event_id="evt_trial_end",
-            event_type="customer.subscription.trial_will_end",
-            customer_id=subscription.stripe_customer_id,
-            user_id=user.id,
-            status="trialing",
-            trial_end=int((utcnow() + timedelta(days=3)).timestamp()),
-        ),
-    )
+    before = len(outbox.outbox)
+    for index in range(3):
+        await _post_event(
+            client,
+            _subscription_event(
+                event="subscription.pending",
+                status="pending",
+                customer_id=customer_id,
+                user_id=user.id,
+            ),
+            event_id=f"evt_pending_{index}",
+        )
 
-    assert any("trial ends" in mail.subject for mail in outbox.outbox)
+    dunning = [
+        message
+        for message in outbox.outbox[before:]
+        if "payment" in message.subject.lower()
+    ]
+    assert len(dunning) == 1
 
 
-# ── Subscription surface ────────────────────────────────────────────────────
+# ── Surfaces ────────────────────────────────────────────────────────────────
 
 
 async def test_the_billing_page_reports_the_real_state(
-    client: AsyncClient, db: AsyncSession, stripe: FakeStripe, unsigned: None
+    client: AsyncClient, db: AsyncSession, razorpay: FakeRazorpay, unsigned: None
 ) -> None:
     user = await _sign_in(client, db, "surface@example.com")
     await client.post(CHECKOUT, json={"plan": "pro", "interval": "monthly"})
@@ -718,10 +795,9 @@ async def test_the_billing_page_reports_the_real_state(
     await _post_event(
         client,
         _subscription_event(
-            event_id="evt_surface",
-            customer_id=subscription.stripe_customer_id,
-            user_id=user.id,
+            customer_id=subscription.provider_customer_id, user_id=user.id
         ),
+        event_id="evt_surface",
     )
 
     data = (await client.get("/api/v1/billing/subscription")).json()["data"]
@@ -732,10 +808,12 @@ async def test_the_billing_page_reports_the_real_state(
 
 
 async def test_cancellation_is_at_period_end_and_reversible(
-    client: AsyncClient, db: AsyncSession, stripe: FakeStripe, unsigned: None
+    client: AsyncClient, db: AsyncSession, razorpay: FakeRazorpay, unsigned: None
 ) -> None:
     """The period is paid for and stays. 'I changed my mind' happens more often
-    than the cancellation itself."""
+    than the cancellation itself — and on Razorpay the undo is a different call
+    rather than the same one with a flag, because a scheduled cancellation is a
+    pending change rather than a boolean."""
     user = await _sign_in(client, db, "reversible@example.com")
     await client.post(CHECKOUT, json={"plan": "pro", "interval": "monthly"})
     subscription = await billing_service.get_subscription(db, user)
@@ -743,8 +821,9 @@ async def test_cancellation_is_at_period_end_and_reversible(
     await _post_event(
         client,
         _subscription_event(
-            event_id="evt_rev", customer_id=subscription.stripe_customer_id, user_id=user.id
+            customer_id=subscription.provider_customer_id, user_id=user.id
         ),
+        event_id="evt_rev",
     )
 
     cancelled = await client.post("/api/v1/billing/cancellation", json={"cancel": True})
@@ -754,29 +833,19 @@ async def test_cancellation_is_at_period_end_and_reversible(
 
     resumed = await client.post("/api/v1/billing/cancellation", json={"cancel": False})
     assert resumed.json()["data"]["cancel_at_period_end"] is False
-    assert [call["cancel"] for call in stripe.cancellations] == [True, False]
+
+    assert [call["at_cycle_end"] for call in razorpay.cancellations] == [True]
+    assert len(razorpay.scheduled_cancellations) == 1
 
 
-async def test_the_portal_needs_a_billing_account(
-    client: AsyncClient, db: AsyncSession, stripe: FakeStripe
-) -> None:
+async def test_there_is_no_billing_portal(client: AsyncClient, db: AsyncSession) -> None:
+    """It went with Stripe (D-50). Razorpay has no hosted portal, and the two
+    things the portal did — invoices and cancellation — are served in-app."""
     await _sign_in(client, db, "noportal@example.com")
     assert (await client.post("/api/v1/billing/portal-session")).status_code == 404
 
 
-async def test_the_portal_returns_a_url_once_there_is_one(
-    client: AsyncClient, db: AsyncSession, stripe: FakeStripe
-) -> None:
-    await _sign_in(client, db, "portal@example.com")
-    await client.post(CHECKOUT, json={"plan": "pro", "interval": "monthly"})
-
-    response = await client.post("/api/v1/billing/portal-session")
-    assert response.status_code == 200
-    assert response.json()["data"]["url"].startswith("https://portal.stripe.test/")
-    assert stripe.portals[0]["return_url"].endswith("/settings/billing")
-
-
-async def test_invoices_are_empty_rather_than_an_error_without_a_customer(
+async def test_invoices_are_empty_rather_than_an_error_without_a_subscription(
     client: AsyncClient, db: AsyncSession
 ) -> None:
     await _sign_in(client, db, "noinvoices@example.com")

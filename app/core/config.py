@@ -105,24 +105,28 @@ class Settings(BaseSettings):
     #: no reason, so the threshold is on predicted size, not on format.
     export_async_threshold_bytes: int = 512 * 1024
 
-    # ── Billing (M20) ──────────────────────────────────────────────────────
+    # ── Billing (M20, Razorpay since D-50) ─────────────────────────────────
+    #: A kill switch independent of the keys, so a staging environment can hold
+    #: real credentials and still refuse to take money.
+    razorpay_enabled: bool = False
     #: Absent everywhere except staging and production. The billing module
     #: imports and degrades — checkout returns a 402 that says so — exactly as
     #: the AI layer does without an API key.
-    stripe_secret_key: str = ""
+    razorpay_key_id: str = ""
+    razorpay_key_secret: str = ""
     #: Verified on every webhook. A webhook endpoint that accepts unsigned
     #: bodies is an unauthenticated "make me Pro" endpoint, so an unset secret
     #: rejects rather than waves through.
-    stripe_webhook_secret: str = ""
-    #: Price ids, created by `python -m app.cli stripe-sync` rather than in the
+    razorpay_webhook_secret: str = ""
+    #: Plan ids, created by `python -m app.cli razorpay-sync` rather than in the
     #: dashboard, so environments are reproducible. Empty means that plan
     #: cannot be checked out in this environment.
-    stripe_price_pro_monthly: str = ""
-    stripe_price_pro_annual: str = ""
-    stripe_price_team_monthly: str = ""
-    stripe_price_team_annual: str = ""
-    #: How long a failed payment keeps its features. Stripe's own dunning runs
-    #: retries inside this window; the downgrade happens when it gives up.
+    razorpay_plan_pro_monthly: str = ""
+    razorpay_plan_pro_annual: str = ""
+    razorpay_plan_team_monthly: str = ""
+    razorpay_plan_team_annual: str = ""
+    #: How long a failed payment keeps its features. Razorpay's own retries run
+    #: inside this window; the downgrade happens when it gives up.
     dunning_grace_days: int = 7
 
     # ── Observability ──────────────────────────────────────────────────────
@@ -175,10 +179,15 @@ class Settings(BaseSettings):
 
     @property
     def billing_enabled(self) -> bool:
-        """Both halves, not just the key. A deploy with a secret key and no
-        webhook secret can take a payment and never hear that it succeeded,
-        which is the single worst state this module has."""
-        return bool(self.stripe_secret_key and self.stripe_webhook_secret)
+        """All of it, not just the keys. A deploy with API keys and no webhook
+        secret can take a payment and never hear that it succeeded, which is
+        the single worst state this module has."""
+        return bool(
+            self.razorpay_enabled
+            and self.razorpay_key_id
+            and self.razorpay_key_secret
+            and self.razorpay_webhook_secret
+        )
 
     @property
     def google_oauth_enabled(self) -> bool:
@@ -202,11 +211,13 @@ class Settings(BaseSettings):
                 "Generate them with: uv run python -m app.cli generate-keypair"
             )
 
-        # A secret key with no webhook secret is worse than no billing at all:
+        # Keys with no webhook secret are worse than no billing at all:
         # checkout succeeds, the customer is charged, and nothing ever upgrades
         # them because every delivery fails signature verification.
-        if self.stripe_secret_key and not self.stripe_webhook_secret:
-            problems.append("STRIPE_WEBHOOK_SECRET is required when STRIPE_SECRET_KEY is set.")
+        if self.razorpay_key_id and not self.razorpay_webhook_secret:
+            problems.append("RAZORPAY_WEBHOOK_SECRET is required when RAZORPAY_KEY_ID is set.")
+        if self.razorpay_key_id and not self.razorpay_key_secret:
+            problems.append("RAZORPAY_KEY_SECRET is required when RAZORPAY_KEY_ID is set.")
 
         if self.is_production:
             if not self.cookie_secure:
