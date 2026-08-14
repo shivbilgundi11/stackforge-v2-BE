@@ -56,16 +56,20 @@ class FakeRazorpay:
     """Records what it was asked to do. Asserted against, never called out."""
 
     def __init__(self) -> None:
+        self.customers: list[dict[str, Any]] = []
         self.subscriptions: list[dict[str, Any]] = []
         self.cancellations: list[dict[str, Any]] = []
         self.scheduled_cancellations: list[dict[str, Any]] = []
         self.quantities: list[dict[str, Any]] = []
         self.invoices: list[dict[str, Any]] = []
 
-    async def create_subscription(self, **kwargs: Any) -> tuple[str, str]:
+    async def create_customer(self, *, email: str, name: str, user_id: str) -> str:
+        self.customers.append({"email": email, "name": name, "user_id": user_id})
+        return f"cust_{len(self.customers)}"
+
+    async def create_subscription(self, **kwargs: Any) -> str:
         self.subscriptions.append(kwargs)
-        subscription_id = f"sub_test_{len(self.subscriptions)}"
-        return subscription_id, f"https://rzp.io/i/{subscription_id}"
+        return f"sub_test_{len(self.subscriptions)}"
 
     async def fetch_subscription(self, **kwargs: Any) -> dict[str, Any]:
         return {}
@@ -287,7 +291,7 @@ async def test_checkout_carries_the_user_id_in_the_notes(
 
     response = await client.post(CHECKOUT, json={"plan": "pro", "interval": "monthly"})
     assert response.status_code == 200, response.text
-    assert response.json()["data"]["url"].startswith("https://rzp.io/i/")
+    assert response.json()["data"]["subscription_id"] == "sub_test_1"
 
     assert razorpay.subscriptions[0]["notes"] == {"user_id": user.id}
     assert razorpay.subscriptions[0]["plan_id"] == PRO_MONTHLY
@@ -311,17 +315,11 @@ async def test_checkout_writes_an_incomplete_subscription_before_redirecting(
     assert user.plan is Plan.FREE, "creating a subscription is not being on it"
 
 
-async def test_a_second_checkout_reuses_the_row_and_names_no_customer(
+async def test_a_second_checkout_reuses_the_row_and_the_customer(
     client: AsyncClient, db: AsyncSession, razorpay: FakeRazorpay
 ) -> None:
     """One live subscription per user is a database invariant, so an abandoned
-    Pro attempt followed by a Team attempt has to update rather than insert.
-
-    And neither attempt names a customer. Sending `customer_id` is what makes
-    Razorpay withhold the hosted page (D-50), so the assertion is on its
-    absence — a regression here is not a failing request, it is a live
-    checkout that dead-ends on Razorpay's error page.
-    """
+    Pro attempt followed by a Team attempt has to update rather than insert."""
     user = await _sign_in(client, db, "reuse@example.com")
     await client.post(CHECKOUT, json={"plan": "pro", "interval": "monthly"})
     await client.post(CHECKOUT, json={"plan": "team", "interval": "monthly", "seats": 3})
@@ -334,41 +332,27 @@ async def test_a_second_checkout_reuses_the_row_and_names_no_customer(
     assert len(rows) == 1
     assert rows[0].plan is Plan.TEAM
     assert rows[0].seats == 3
-    assert rows[0].provider_customer_id is None, "not known until the mandate is authorized"
-    assert all("customer_id" not in call for call in razorpay.subscriptions)
-    assert [call["notify_email"] for call in razorpay.subscriptions] == [
-        "reuse@example.com",
-        "reuse@example.com",
-    ]
+    assert len(razorpay.customers) == 1, "one customer per user, forever"
 
 
-async def test_the_webhook_is_where_the_customer_id_comes_from(
-    client: AsyncClient, db: AsyncSession, razorpay: FakeRazorpay, unsigned: None
+async def test_checkout_returns_what_the_browser_opens_razorpay_with(
+    client: AsyncClient, db: AsyncSession, razorpay: FakeRazorpay
 ) -> None:
-    """Checkout cannot know it, so the first delivery has to teach it.
+    """A subscription id and a key, never a URL.
 
-    Razorpay creates the customer when the mandate is authorized, so a row
-    sitting between the redirect and the webhook legitimately has none. If this
-    never landed, `provider_customer_id` would stay NULL forever and the
-    fallback that resolves a delivery by customer would never match.
+    The hosted page this used to return takes no callback, so anyone who
+    authorized on it stayed there (D-52). Checkout is opened in the browser
+    instead, and it needs both of these.
     """
-    user = await _sign_in(client, db, "learns-customer@example.com")
-    await client.post(CHECKOUT, json={"plan": "pro", "interval": "monthly"})
+    await _sign_in(client, db, "opens-checkout@example.com")
 
-    subscription = await db.scalar(select(Subscription).where(Subscription.user_id == user.id))
-    assert subscription is not None
-    assert subscription.provider_customer_id is None
+    response = await client.post(CHECKOUT, json={"plan": "pro", "interval": "monthly"})
 
-    assert (
-        await _post_event(
-            client,
-            _subscription_event(customer_id="cust_learned", user_id=user.id),
-        )
-        == 200
-    )
-
-    await db.refresh(subscription)
-    assert subscription.provider_customer_id == "cust_learned"
+    assert response.status_code == 200
+    body = response.json()["data"]
+    assert body["subscription_id"] == "sub_test_1"
+    assert body["key_id"]
+    assert "url" not in body
 
 
 async def test_a_later_event_without_a_customer_does_not_erase_it(

@@ -107,7 +107,18 @@ class CheckoutIn(BaseModel):
 
 
 class CheckoutOut(BaseModel):
-    url: str
+    """What the browser opens Razorpay Checkout with.
+
+    Not a URL to redirect to. Authorization happens in a modal over our own
+    page, because Razorpay's hosted subscription page accepts no callback and
+    strands whoever pays on it (D-52).
+    """
+
+    subscription_id: str
+    #: The publishable half of the key pair, safe in a browser. Served from
+    #: here rather than built into the frontend so a rotation is a backend
+    #: restart, not a redeploy of the web app.
+    key_id: str
 
 
 class InvoiceOut(BaseModel):

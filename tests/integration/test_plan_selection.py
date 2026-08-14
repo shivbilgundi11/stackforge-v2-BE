@@ -46,9 +46,12 @@ class _FakeRazorpay:
     def __init__(self) -> None:
         self.checkouts: list[dict[str, Any]] = []
 
-    async def create_subscription(self, **kwargs: Any) -> tuple[str, str]:
+    async def create_customer(self, *, email: str, name: str, user_id: str) -> str:
+        return "cust_selection"
+
+    async def create_subscription(self, **kwargs: Any) -> str:
         self.checkouts.append(kwargs)
-        return f"sub_{len(self.checkouts)}", "https://rzp.io/i/selection"
+        return f"sub_{len(self.checkouts)}"
 
 
 @pytest.fixture
@@ -411,7 +414,7 @@ async def test_the_wall_opens_checkout_on_the_plan_that_was_chosen(
         json={"plan": summary["pending_plan"], "interval": summary["pending_interval"]},
     )
     assert response.status_code == 200, response.text
-    assert response.json()["data"]["url"].startswith("https://rzp.io/")
+    assert response.json()["data"]["subscription_id"] == "sub_1"
 
     assert razorpay.checkouts[0]["plan_id"] == PRO_MONTHLY
     # The account travels in `notes`, which Razorpay echoes on every

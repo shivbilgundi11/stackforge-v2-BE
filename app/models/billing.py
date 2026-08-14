@@ -121,13 +121,15 @@ class Subscription(Base, TimestampMixin):
         String(64), ForeignKey("organizations.id", ondelete="CASCADE")
     )
 
-    #: NULL until the mandate is authorized. Razorpay creates the customer on
-    #: its own hosted page and tells us the id in the first webhook, because a
-    #: subscription created against a customer we made has no hosted page at
-    #: all (D-50). So this is a record of who paid, not a handle we check out
-    #: against — and a resubscribe six months later may well land on a second
-    #: customer record, which is the invoice-history split this column used to
-    #: prevent and no longer can.
+    #: The provider's customer record outlives any single subscription — a user
+    #: who cancels and resubscribes six months later must land on the same
+    #: record, or their invoice history splits in two.
+    #:
+    #: Nullable only because of the rows in between: checkout briefly created
+    #: subscriptions without a customer, to keep Razorpay's hosted page
+    #: working, and those rows can never be backfilled because Razorpay never
+    #: made a customer for them (D-50 → D-52). Every row written since carries
+    #: one from the moment it is created.
     provider_customer_id: Mapped[str | None] = mapped_column(String(80))
     provider_subscription_id: Mapped[str | None] = mapped_column(String(80), unique=True)
     #: Which plan this subscription is on, so a plan change can be detected by

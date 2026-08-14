@@ -202,10 +202,10 @@ async def create_checkout(db: Db, user: CurrentUser, payload: CheckoutIn) -> dic
     except ValueError:
         raise ValidationFailed.on_field("plan", "No such plan.") from None
 
-    url = await billing_service.start_checkout(
+    handle = await billing_service.start_checkout(
         db, user, plan=plan, interval=payload.interval, seats=payload.seats
     )
-    return ok(CheckoutOut(url=url))
+    return ok(CheckoutOut(subscription_id=handle.subscription_id, key_id=handle.key_id))
 
 
 # `POST /portal-session` went with Stripe (D-50). Razorpay has no hosted

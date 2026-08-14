@@ -212,6 +212,19 @@ async def _by_provider_subscription(db: AsyncSession, subscription_id: str) -> S
 
 
 @dataclass(frozen=True)
+class CheckoutHandle:
+    """What the browser needs to open Razorpay Checkout.
+
+    Not a URL. The mandate is authorized in a modal over our own page rather
+    than on a page of Razorpay's, because only Checkout takes a `callback_url`
+    (D-52).
+    """
+
+    subscription_id: str
+    key_id: str
+
+
+@dataclass(frozen=True)
 class BillingSummary:
     """What `settings/billing` renders. Assembled here so the route is three
     lines and the shape has one owner."""
@@ -339,18 +352,23 @@ async def start_checkout(
     plan: Plan,
     interval: Interval,
     seats: int = 1,
-) -> str:
-    """Create a Razorpay subscription and return its hosted authorization URL.
+) -> CheckoutHandle:
+    """Create a Razorpay subscription and return what the browser opens it with.
 
     There is no checkout session on this provider. The subscription is created
-    server side in `created` state and carries a `short_url` — the hosted page
-    where the customer authorizes a mandate — so the row here is written before
-    anyone has paid. `subscription.activated` is what grants the plan; the
-    redirect never does.
+    server side in `created` state, and the browser authorizes a mandate
+    against its id with Razorpay's Checkout script — so the row here is written
+    before anyone has paid. `subscription.activated` is what grants the plan;
+    the return redirect never does.
 
     An abandoned authorization therefore leaves a real Razorpay subscription
     sitting in `created`. That is harmless — nothing can be charged against an
     unauthorized mandate — and the next attempt reuses the row.
+
+    The key id goes out with it. It is the publishable half of the pair and is
+    meant to be in a browser; sending it from here rather than building it into
+    the frontend keeps one source of truth, so a key rotation is a backend
+    restart instead of a rebuild and redeploy of the web app.
     """
     client = razorpay_integration.get_client()
     if client is None:
@@ -382,7 +400,8 @@ async def start_checkout(
     if subscription is not None and subscription.is_paid and subscription.plan == plan:
         raise Conflict("You are already on this plan.")
 
-    subscription = await _ensure_row(db, user, subscription, plan=plan)
+    customer_id = await _ensure_customer(client, subscription, user)
+    subscription = await _ensure_row(db, user, subscription, plan=plan, customer_id=customer_id)
 
     # A trial is offered once. Razorpay would happily start another delayed
     # subscription, and "cancel and re-subscribe" is not a supported way to get
@@ -393,9 +412,9 @@ async def start_checkout(
     # D-42 that D-50 gives up.
     start_at = int((utcnow() + timedelta(days=trial_days)).timestamp()) if trial_days else None
 
-    provider_subscription_id, url = await client.create_subscription(
+    provider_subscription_id = await client.create_subscription(
         plan_id=provider_plan_id,
-        notify_email=user.email,
+        customer_id=customer_id,
         quantity=seats,
         total_count=_TOTAL_COUNT.get(interval, 120),
         start_at=start_at,
@@ -420,7 +439,7 @@ async def start_checkout(
         trial_days=trial_days,
         subscription_id=provider_subscription_id,
     )
-    return url
+    return CheckoutHandle(subscription_id=provider_subscription_id, key_id=settings.razorpay_key_id)
 
 
 # `open_portal` went with Stripe (D-50). Razorpay has no hosted billing portal,
@@ -464,12 +483,29 @@ async def set_cancellation(db: AsyncSession, user: User, *, cancel: bool) -> Sub
     return subscription
 
 
+async def _ensure_customer(
+    client: razorpay_integration.RazorpayClient,
+    subscription: Subscription | None,
+    user: User,
+) -> str:
+    """One Razorpay customer per user, forever.
+
+    Reused across subscriptions on purpose: a user who cancels and comes back
+    six months later must land on the same customer record, or their invoice
+    history splits in two and support cannot answer "what have I paid you".
+    """
+    if subscription is not None and subscription.provider_customer_id:
+        return subscription.provider_customer_id
+    return await client.create_customer(email=user.email, name=user.name, user_id=user.id)
+
+
 async def _ensure_row(
     db: AsyncSession,
     user: User,
     subscription: Subscription | None,
     *,
     plan: Plan,
+    customer_id: str,
 ) -> Subscription:
     """Reuse the live row rather than inserting a second one.
 
@@ -492,6 +528,7 @@ async def _ensure_row(
     reason this function reuses rows at all.
     """
     if subscription is not None:
+        subscription.provider_customer_id = customer_id
         if not subscription.is_paid:
             subscription.plan = plan
         await db.flush()
@@ -500,6 +537,7 @@ async def _ensure_row(
     row = Subscription(
         id=new_id("sub"),
         user_id=user.id,
+        provider_customer_id=customer_id,
         plan=plan,
         status=SubscriptionStatus.INCOMPLETE,
     )
