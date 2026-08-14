@@ -21,6 +21,7 @@ app modules into an error.
 
 from __future__ import annotations
 
+import json
 from typing import Any, Protocol
 
 import stripe
@@ -251,7 +252,7 @@ def verify_signature(payload: bytes, signature: str | None) -> dict[str, Any]:
         raise UpstreamError("Missing Stripe signature.")
 
     try:
-        event = stripe.Webhook.construct_event(payload, signature, settings.stripe_webhook_secret)
+        stripe.Webhook.construct_event(payload, signature, settings.stripe_webhook_secret)
     except stripe.SignatureVerificationError as exc:
         logger.warning("stripe.webhook_bad_signature", error=str(exc))
         raise UpstreamError("Signature verification failed.") from exc
@@ -259,7 +260,21 @@ def verify_signature(payload: bytes, signature: str | None) -> dict[str, Any]:
         logger.warning("stripe.webhook_bad_payload", error=str(exc))
         raise UpstreamError("Malformed webhook payload.") from exc
 
-    return dict(event)
+    # The verified *bytes* are the event, so parse those rather than convert
+    # the SDK's object.
+    #
+    # `stripe.Event` used to subclass `dict`, and `dict(event)` was a copy. In
+    # stripe-python 15 it is a plain `APIResource`, so `dict(event)` falls back
+    # to the iterable-of-pairs protocol and dies with `KeyError: 0` on every
+    # real delivery. The public replacement, `to_dict()`, is shallow — it
+    # leaves `data.object` as a `StripeObject`, which is not JSON-serialisable
+    # into the `stripe_events.payload` JSONB column — and the recursive form is
+    # private. Reaching for either is how this breaks again at the next major.
+    #
+    # `json.loads` of the bytes that were just verified has none of those
+    # problems and is byte-faithful to what Stripe sent, which is what an
+    # event log wants to store anyway.
+    return dict(json.loads(payload))
 
 
 __all__ = [
