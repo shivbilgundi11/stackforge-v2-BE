@@ -216,6 +216,16 @@ class PlanSpec:
     #: Annual billing at two months free, so twelve months costs ten.
     annual_minor: int | None
     per_seat: bool
+    #: Zero on every plan: the product does not sell a trial.
+    #:
+    #: Kept as a field rather than deleted because it is not only copy. A
+    #: non-zero value makes `billing_service` set `start_at` in the future,
+    #: and Razorpay reads a future start as "authorize the mandate now, charge
+    #: later" — so Checkout collects its token authorization amount (₹5)
+    #: instead of the plan price, and the customer sees ₹5 where ₹1,599 was
+    #: advertised. The trial machinery downstream (`trial_ends_at`,
+    #: `_has_trialed`, the expiry reminder worker) still exists to serve any
+    #: subscription created while this was 7; nothing new enters it.
     trial_days: int
     #: The pricing table's bullet list, in order.
     highlights: tuple[str, ...]
@@ -254,7 +264,7 @@ PLANS: Final[tuple[PlanSpec, ...]] = (
         monthly_minor=159_900,
         annual_minor=1_599_900,
         per_seat=False,
-        trial_days=7,
+        trial_days=0,
         highlights=(
             "Unlimited tool runs",
             "100 AI-assisted runs a day",
@@ -263,7 +273,7 @@ PLANS: Final[tuple[PlanSpec, ...]] = (
             "Price-change and deprecation alerts",
             "The full template library",
         ),
-        cta="Start 7-day trial",
+        cta="Upgrade to Pro",
         checkout=True,
     ),
     PlanSpec(
@@ -273,7 +283,7 @@ PLANS: Final[tuple[PlanSpec, ...]] = (
         monthly_minor=399_900,
         annual_minor=3_999_900,
         per_seat=True,
-        trial_days=7,
+        trial_days=0,
         highlights=(
             "Everything in Pro, per seat",
             "300 AI-assisted runs a day",
@@ -281,7 +291,7 @@ PLANS: Final[tuple[PlanSpec, ...]] = (
             "Unlimited projects",
             "500 exports a month",
         ),
-        cta="Start 7-day trial",
+        cta="Choose Team",
         checkout=True,
     ),
     PlanSpec(
