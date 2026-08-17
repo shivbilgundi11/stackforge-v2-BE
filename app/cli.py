@@ -291,6 +291,49 @@ def _razorpay_sync() -> None:
         print(line)
 
 
+def _razorpay_reconcile() -> None:
+    """razorpay-reconcile <email> — pull this account's real subscription state.
+
+    The operator answer to "I paid and my plan did not change". Razorpay ships
+    no CLI that forwards webhooks, so locally the delivery that grants a plan
+    never arrives unless a tunnel is registered — and in production one can
+    still be lost. This fetches the subscription from the API and pushes it
+    through the same handler a delivery would, so the outcome is identical to
+    the event having arrived.
+
+    Prefer this to `set-plan` for anything payment-related: `set-plan` writes a
+    plan the subscription does not know about, and the next real delivery
+    overwrites it.
+    """
+    import asyncio
+
+    if len(sys.argv) < 3:
+        print("usage: python -m app.cli razorpay-reconcile <email>")
+        raise SystemExit(2)
+    email = sys.argv[2]
+
+    async def run() -> None:
+        from sqlalchemy import select
+
+        from app.core.database import SessionLocal
+        from app.models.user import User
+        from app.services import billing_service
+
+        async with SessionLocal() as session:
+            user = (
+                await session.execute(select(User).where(User.email == email))
+            ).scalar_one_or_none()
+            if user is None:
+                print(f"no user with email {email}")
+                raise SystemExit(1)
+            was = user.plan.value
+            detail = await billing_service.reconcile(session, user)
+            await session.commit()
+            print(f"{email}: {was} -> {user.plan.value} ({detail})")
+
+    asyncio.run(run())
+
+
 COMMANDS = {
     "generate-keypair": _generate_keypair,
     "openapi": _openapi,
@@ -299,6 +342,7 @@ COMMANDS = {
     "invite-link": _invite_link,
     "purge-runs": _purge_runs,
     "razorpay-sync": _razorpay_sync,
+    "razorpay-reconcile": _razorpay_reconcile,
 }
 
 

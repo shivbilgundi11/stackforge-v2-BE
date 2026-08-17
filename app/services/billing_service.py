@@ -106,6 +106,15 @@ _STATUS_MAP: Final[dict[str, SubscriptionStatus]] = {
     "paused": SubscriptionStatus.CANCELED,
 }
 
+#: The statuses that mean a mandate has been authorized and this subscription
+#: is the one now charging. `PAST_DUE` is excluded on purpose: a replacement
+#: whose very first charge failed has not taken over from anything, and
+#: retiring the working subscription on the strength of it would leave the
+#: account with no live subscription at all.
+_LIVE_STATUSES: Final[frozenset[SubscriptionStatus]] = frozenset(
+    {SubscriptionStatus.ACTIVE, SubscriptionStatus.TRIALING}
+)
+
 Interval = str  # "monthly" | "annual"
 
 #: Razorpay requires a finite `total_count`. Ten years of billing cycles is the
@@ -423,11 +432,31 @@ async def start_checkout(
         notes={"user_id": user.id},
     )
 
-    subscription.seats = seats
-    subscription.provider_plan_id = provider_plan_id
-    subscription.provider_subscription_id = provider_subscription_id
-    if trial_days:
-        subscription.trial_ends_at = utcnow() + timedelta(days=trial_days)
+    # An upgrade between paid plans is a *new* subscription on this provider —
+    # there is no "change the plan" call — and both bill until one is
+    # cancelled. So the in-flight one is parked in `pending_subscription_id`
+    # rather than written over the live one: nothing has been authorized yet,
+    # and until it is, the subscription this row describes is still the one the
+    # account is paying for. `_on_subscription_changed` promotes it on
+    # activation and cancels the one it replaces.
+    #
+    # Overwriting here is what produced an account subscribed to Pro *and*
+    # Team with the Pro id nowhere in the database — nothing could cancel it,
+    # and the row's status and period still described the plan it had left.
+    live = subscription.provider_subscription_id
+    upgrading = bool(subscription.is_paid and live and live != provider_subscription_id)
+
+    if upgrading:
+        subscription.pending_subscription_id = provider_subscription_id
+    else:
+        subscription.seats = seats
+        subscription.provider_plan_id = provider_plan_id
+        subscription.provider_subscription_id = provider_subscription_id
+    # Assigned either way. The row outlives a checkout, so an account that
+    # started a trial before trials were withdrawn would otherwise carry that
+    # date forever — and a subscription that says it is on a trial it is not
+    # on is the kind of state someone later reads and believes.
+    subscription.trial_ends_at = utcnow() + timedelta(days=trial_days) if trial_days else None
     await db.flush()
 
     logger.info(
@@ -438,6 +467,7 @@ async def start_checkout(
         seats=seats,
         trial_days=trial_days,
         subscription_id=provider_subscription_id,
+        upgrading_from=live if upgrading else None,
     )
     return CheckoutHandle(subscription_id=provider_subscription_id, key_id=settings.razorpay_key_id)
 
@@ -681,6 +711,42 @@ async def _on_subscription_changed(db: AsyncSession, obj: dict[str, Any]) -> str
     if subscription is None:
         return "no matching subscription"
 
+    incoming_id = obj.get("id") if isinstance(obj.get("id"), str) else None
+    live_id = subscription.provider_subscription_id
+
+    # An upgrade leaves two real subscriptions at the provider for as long as
+    # it takes the replacement to activate, and both of them send events that
+    # resolve to this one row — the `notes.user_id` and customer fallbacks in
+    # `_resolve_subscription` do not care which subscription is current.
+    #
+    # Only two of them may write here: the live one, and the pending one at the
+    # moment it activates. Anything else is a subscription this account has
+    # moved past, and letting it through means the cancellation we ourselves
+    # requested arrives a second later and rewrites the row back to the plan
+    # the user just upgraded away from.
+    promoting = (
+        incoming_id is not None
+        and incoming_id == subscription.pending_subscription_id
+        and _STATUS_MAP.get(str(obj.get("status") or "")) in _LIVE_STATUSES
+    )
+    if incoming_id is not None and live_id is not None and incoming_id != live_id and not promoting:
+        logger.info(
+            "billing.event_for_superseded_subscription",
+            subscription_id=subscription.id,
+            incoming=incoming_id,
+            live=live_id,
+        )
+        return "superseded subscription"
+
+    if promoting:
+        # The upgrade is paid for. Retire the subscription it replaces *first*:
+        # if that call fails the whole delivery fails, Razorpay retries, and
+        # the account is left on the old plan it is still paying for rather
+        # than on the new plan while quietly being billed for both.
+        await _retire_superseded(db, subscription)
+        subscription.provider_subscription_id = incoming_id
+        subscription.pending_subscription_id = None
+
     raw_status = str(obj.get("status") or "")
     status = _STATUS_MAP.get(raw_status, SubscriptionStatus.INCOMPLETE)
     provider_plan_id = _provider_plan_id(obj)
@@ -701,11 +767,22 @@ async def _on_subscription_changed(db: AsyncSession, obj: dict[str, Any]) -> str
     if isinstance(customer_id := obj.get("customer_id"), str) and customer_id:
         subscription.provider_customer_id = customer_id
 
-    # Razorpay reports a scheduled cancellation as an end date rather than a
-    # boolean: `end_at` is set while the subscription is still running.
-    subscription.cancel_at_period_end = bool(obj.get("end_at")) and status not in (
-        SubscriptionStatus.CANCELED,
-    )
+    # `cancel_at_period_end` is **not** read from the object, because Razorpay
+    # does not report it. Verified against the live API rather than inferred:
+    # `cancel_at_cycle_end=1` returns 200, leaves `status` at `active`, and
+    # changes no field on the subscription entity — not `end_at`, not
+    # `ended_at`, not `has_scheduled_changes`.
+    #
+    # `end_at` was being read as that signal and is not: it is set at creation
+    # from `total_count`, which this product sends as ten years of cycles. So
+    # it was populated on every subscription ever created, and every paying
+    # customer was told their plan was about to end.
+    #
+    # The flag is therefore owned locally — `set_cancellation` writes it when
+    # the user clicks the button — and this handler only clears it, because a
+    # subscription that has already ended is no longer pending anything.
+    if status is SubscriptionStatus.CANCELED:
+        subscription.cancel_at_period_end = False
     subscription.current_period_start = _timestamp(obj.get("current_start"))
     subscription.current_period_end = _timestamp(obj.get("current_end"))
     # `start_at` in the future *is* the trial: the mandate is authorized and
@@ -751,6 +828,115 @@ async def _on_subscription_changed(db: AsyncSession, obj: dict[str, Any]) -> str
         status=status.value,
     )
     return f"subscription {status.value}"
+
+
+async def reconcile(db: AsyncSession, user: User) -> str:
+    """Ask Razorpay what this account's subscriptions actually are, and apply it.
+
+    The provider creates a subscription *before* it is paid for, so success
+    exists only as an inbound `subscription.activated`. Until this function
+    there was no other way to learn it: `sync_user_plan` recomputes from local
+    rows and never calls out. One lost delivery therefore meant a customer who
+    had paid, an account that had not moved, and no route back except an
+    operator editing the database.
+
+    Razorpay ships no CLI that forwards webhooks to a developer machine either,
+    so locally the delivery is not merely unreliable — it is absent unless
+    someone has registered a tunnel. That made a whole payment flow untestable
+    without one.
+
+    Pull, not push. Both the in-flight subscription and the live one are
+    fetched and pushed through the same handler the webhook uses, so there is
+    exactly one implementation of "what does this event mean" and reconciling
+    cannot drift from receiving. Deliveries stay authoritative; this is the
+    repair path.
+    """
+    client = razorpay_integration.get_client()
+    if client is None:
+        raise PlanRequired(
+            "Billing is not configured in this environment.",
+            details={"reason": "billing_not_configured"},
+        )
+
+    subscription = await get_subscription(db, user)
+    if subscription is None:
+        return "no subscription"
+
+    # Pending first. If the upgrade has been authorized it is the one that
+    # should win, and applying it retires the other — fetching them the other
+    # way round would apply the subscription that is about to be cancelled.
+    candidates = [
+        candidate
+        for candidate in (
+            subscription.pending_subscription_id,
+            subscription.provider_subscription_id,
+        )
+        if candidate
+    ]
+
+    applied = "nothing to apply"
+    for subscription_id in candidates:
+        entity = await client.fetch_subscription(subscription_id=subscription_id)
+        if not entity:
+            continue
+        # Wrapped to look exactly like a delivery, so `process_event` needs no
+        # branch for where the entity came from — and so the reconciliation is
+        # recorded in `billing_events` alongside real deliveries rather than
+        # changing a plan with no audit trail.
+        event = {
+            "entity": "event",
+            "event": "subscription.activated",
+            "contains": ["subscription"],
+            "payload": {"subscription": {"entity": entity}},
+        }
+        # The id has to be stable enough that reconciling twice over unchanged
+        # state is a no-op, and loose enough that a subscription which has
+        # genuinely moved gets applied. Keying on the fields that change when
+        # it moves gives both; a bare subscription id would make the *first*
+        # reconcile the only one that ever worked.
+        fingerprint = f"{entity.get('status')}_{entity.get('current_end')}_{entity.get('quantity')}"
+        record = await record_event(
+            db, event, event_id=f"evt_reconcile_{subscription_id}_{fingerprint}"
+        )
+        if record is None:
+            applied = "already applied"
+            continue
+        applied = await process_event(db, record)
+
+    logger.info("billing.reconciled", user_id=user.id, plan=user.plan.value, detail=applied)
+    return applied
+
+
+async def _retire_superseded(db: AsyncSession, subscription: Subscription) -> None:
+    """Cancel the subscription an upgrade has just replaced.
+
+    **Immediately, not at cycle end.** The account is now paying for the better
+    plan from today, and Razorpay does not prorate (D-51) — leaving the old one
+    to run out its cycle means charging twice for an overlapping period to
+    deliver one plan. The cycle they already paid for is not lost either: the
+    replacement's own period started when it was authorized.
+
+    A failure here is raised, not swallowed. `record_event` leaves the delivery
+    unprocessed, the hourly retry job picks it up, and until it succeeds the
+    account stays on the plan it is provably paying for. The alternative —
+    promote anyway and log the orphan — is how a customer ends up billed for
+    two plans with nothing in the product able to see it.
+    """
+    stale = subscription.provider_subscription_id
+    if not stale:
+        return
+
+    client = razorpay_integration.get_client()
+    if client is None:
+        logger.warning("billing.retire_skipped_no_client", subscription_id=stale)
+        return
+
+    await client.cancel_subscription(subscription_id=stale, at_cycle_end=False)
+    logger.info(
+        "billing.superseded_subscription_cancelled",
+        subscription_id=subscription.id,
+        cancelled=stale,
+    )
 
 
 async def _notify_payment_failed(db: AsyncSession, subscription: Subscription) -> None:

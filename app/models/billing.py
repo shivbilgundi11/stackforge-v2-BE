@@ -132,6 +132,24 @@ class Subscription(Base, TimestampMixin):
     #: one from the moment it is created.
     provider_customer_id: Mapped[str | None] = mapped_column(String(80))
     provider_subscription_id: Mapped[str | None] = mapped_column(String(80), unique=True)
+    #: An upgrade that has been created at the provider but not yet paid for.
+    #:
+    #: Razorpay has no "change the plan on a subscription" call, so moving from
+    #: Pro to Team means creating a *second* subscription and retiring the
+    #: first. Both exist and both bill until one is cancelled.
+    #:
+    #: The in-flight one waits here rather than overwriting
+    #: `provider_subscription_id`, because until the mandate is authorized the
+    #: live subscription is still the one the account is paying for and still
+    #: the one whose status, period, and dunning this row has to track. When
+    #: the replacement activates, `_on_subscription_changed` promotes it and
+    #: cancels the one it replaced — then, and not at checkout, so closing the
+    #: authorization sheet cannot take away a plan that is still being paid
+    #: for.
+    #:
+    #: Overwriting the live id here instead is what left an account subscribed
+    #: to Pro *and* Team with no reference to the Pro one anywhere.
+    pending_subscription_id: Mapped[str | None] = mapped_column(String(80))
     #: Which plan this subscription is on, so a plan change can be detected by
     #: comparing against configuration rather than by trusting the event order.
     provider_plan_id: Mapped[str | None] = mapped_column(String(80))

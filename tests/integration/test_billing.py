@@ -62,6 +62,7 @@ class FakeRazorpay:
         self.scheduled_cancellations: list[dict[str, Any]] = []
         self.quantities: list[dict[str, Any]] = []
         self.invoices: list[dict[str, Any]] = []
+        self.entities: dict[str, dict[str, Any]] = {}
 
     async def create_customer(self, *, email: str, name: str, user_id: str) -> str:
         self.customers.append({"email": email, "name": name, "user_id": user_id})
@@ -72,7 +73,13 @@ class FakeRazorpay:
         return f"sub_test_{len(self.subscriptions)}"
 
     async def fetch_subscription(self, **kwargs: Any) -> dict[str, Any]:
-        return {}
+        """What the provider would say if asked directly.
+
+        Seeded per subscription id by the reconciliation tests, which is the
+        whole point of that path: it is the only route to the truth when no
+        webhook ever arrives.
+        """
+        return self.entities.get(str(kwargs.get("subscription_id")), {})
 
     async def list_invoices(self, **kwargs: Any) -> list[dict[str, Any]]:
         return self.invoices
@@ -380,22 +387,33 @@ async def test_a_later_event_without_a_customer_does_not_erase_it(
     assert subscription.provider_customer_id == "cust_kept"
 
 
-async def test_a_trial_is_offered_once(
+async def test_checkout_never_delays_the_first_charge(
     client: AsyncClient, db: AsyncSession, razorpay: FakeRazorpay
 ) -> None:
-    """'Cancel and re-subscribe' is not a supported way to get another free
-    week."""
-    user = await _sign_in(client, db, "trialer@example.com")
+    """The product sells no trial, and `start_at` is the only thing that could
+    create one.
+
+    This guards a failure that is invisible from the code: a future `start_at`
+    makes Razorpay treat the subscription as mandate-first, so Checkout shows
+    its token authorization amount (₹5) rather than the ₹1,599 on the pricing
+    page. The customer sees a price nobody wrote down.
+    """
+    user = await _sign_in(client, db, "buyer@example.com")
+
     await client.post(CHECKOUT, json={"plan": "pro", "interval": "monthly"})
-    assert razorpay.subscriptions[0]["start_at"] is not None
+    assert razorpay.subscriptions[0]["start_at"] is None
 
     subscription = await billing_service.get_subscription(db, user)
     assert subscription is not None
+    assert subscription.trial_ends_at is None
+
+    # Still none for an account carrying a trial from before trials were
+    # withdrawn — that history must not change what a new checkout charges.
     subscription.trial_ends_at = utcnow() + timedelta(days=3)
     await db.flush()
 
     await client.post(CHECKOUT, json={"plan": "team", "interval": "monthly"})
-    assert razorpay.subscriptions[1]["start_at"] is None, "a second trial was granted"
+    assert razorpay.subscriptions[1]["start_at"] is None
 
 
 async def test_checkout_without_razorpay_configured_is_refused_clearly(
@@ -896,3 +914,254 @@ async def test_invoices_are_empty_rather_than_an_error_without_a_subscription(
     response = await client.get("/api/v1/billing/invoices")
     assert response.status_code == 200
     assert response.json()["data"] == []
+
+
+# ── Upgrading between paid plans ────────────────────────────────────────────
+#
+# Razorpay has no call that changes the plan on a subscription. An upgrade is a
+# second subscription, and until its mandate is authorized both exist and both
+# bill. These tests are the contract for that window, and they exist because it
+# went wrong on a real account: it ended up subscribed to Pro *and* Team with
+# the Pro id recorded nowhere, so nothing could cancel it and nothing could see
+# it.
+
+
+async def _upgrade_to_team(
+    client: AsyncClient, db: AsyncSession, email: str
+) -> tuple[User, Subscription, str, str]:
+    """Pro, paid for, then a Team checkout started but not yet authorized."""
+    user = await _sign_in(client, db, email)
+    await client.post(CHECKOUT, json={"plan": "pro", "interval": "monthly"})
+    subscription = await billing_service.get_subscription(db, user)
+    assert subscription is not None
+    pro_id = subscription.provider_subscription_id
+    assert pro_id is not None
+
+    assert (
+        await _post_event(
+            client,
+            _subscription_event(
+                subscription_id=pro_id,
+                customer_id=subscription.provider_customer_id,
+                user_id=user.id,
+            ),
+            event_id=f"evt_pro_{email}",
+        )
+        == 200
+    )
+    await db.refresh(user)
+    assert user.plan is Plan.PRO, "the Pro subscription has to be live before it can be replaced"
+
+    await client.post(CHECKOUT, json={"plan": "team", "interval": "monthly", "seats": 5})
+    await db.refresh(subscription)
+    team_id = subscription.pending_subscription_id
+    assert team_id is not None
+    return user, subscription, pro_id, team_id
+
+
+async def test_an_upgrade_does_not_overwrite_the_subscription_still_being_paid_for(
+    client: AsyncClient, db: AsyncSession, razorpay: FakeRazorpay, unsigned: None
+) -> None:
+    """Until the new mandate is authorized the old subscription is the one
+    charging, so it stays in `provider_subscription_id` and goes on being
+    tracked. Overwriting it lost the reference to a subscription that was still
+    billing, and nothing could then cancel it."""
+    user, subscription, pro_id, team_id = await _upgrade_to_team(
+        client, db, "upgrade-window@example.com"
+    )
+
+    assert subscription.provider_subscription_id == pro_id
+    assert subscription.pending_subscription_id == team_id
+    assert pro_id != team_id
+    assert subscription.plan is Plan.PRO
+    assert user.plan is Plan.PRO, "nothing is granted before the money moves"
+    assert razorpay.cancellations == [], "an unauthorized upgrade cancels nothing"
+
+
+async def test_activating_an_upgrade_cancels_the_subscription_it_replaced(
+    client: AsyncClient, db: AsyncSession, razorpay: FakeRazorpay, unsigned: None
+) -> None:
+    """The one that stops the double charge.
+
+    Immediately, not at cycle end: Razorpay does not prorate (D-51), so leaving
+    the old subscription to run out its cycle bills twice to deliver one plan.
+    """
+    user, subscription, pro_id, team_id = await _upgrade_to_team(
+        client, db, "upgrade-activates@example.com"
+    )
+
+    assert (
+        await _post_event(
+            client,
+            _subscription_event(
+                subscription_id=team_id,
+                customer_id=subscription.provider_customer_id,
+                plan_id=TEAM_MONTHLY,
+                user_id=user.id,
+                quantity=5,
+            ),
+            event_id="evt_team_activated",
+        )
+        == 200
+    )
+
+    await db.refresh(user)
+    await db.refresh(subscription)
+
+    assert user.plan is Plan.TEAM
+    assert subscription.provider_subscription_id == team_id, "the new one is now the live one"
+    assert subscription.pending_subscription_id is None
+    assert subscription.seats == 5
+    assert razorpay.cancellations == [{"subscription_id": pro_id, "at_cycle_end": False}]
+
+
+async def test_the_replaced_subscription_cannot_downgrade_the_account_on_its_way_out(
+    client: AsyncClient, db: AsyncSession, razorpay: FakeRazorpay, unsigned: None
+) -> None:
+    """Cancelling the old subscription makes Razorpay send an event for it, and
+    that event resolves onto this same row through the `notes.user_id`
+    fallback. Applied, it puts the account back on the plan it just left — the
+    upgrade undoing itself a second after it succeeded."""
+    user, subscription, pro_id, team_id = await _upgrade_to_team(
+        client, db, "upgrade-late-event@example.com"
+    )
+    await _post_event(
+        client,
+        _subscription_event(
+            subscription_id=team_id,
+            customer_id=subscription.provider_customer_id,
+            plan_id=TEAM_MONTHLY,
+            user_id=user.id,
+            quantity=5,
+        ),
+        event_id="evt_team_live",
+    )
+
+    # The cancellation we asked for, coming back at us.
+    assert (
+        await _post_event(
+            client,
+            _subscription_event(
+                event="subscription.cancelled",
+                subscription_id=pro_id,
+                customer_id=subscription.provider_customer_id,
+                plan_id=PRO_MONTHLY,
+                status="cancelled",
+                user_id=user.id,
+            ),
+            event_id="evt_pro_cancelled",
+        )
+        == 200
+    )
+
+    await db.refresh(user)
+    await db.refresh(subscription)
+    assert user.plan is Plan.TEAM, "the account keeps the plan it paid for"
+    assert subscription.provider_subscription_id == team_id
+    assert subscription.status is SubscriptionStatus.ACTIVE
+
+
+async def test_a_live_subscription_does_not_report_itself_as_cancelling(
+    client: AsyncClient, db: AsyncSession, razorpay: FakeRazorpay, unsigned: None
+) -> None:
+    """`end_at` is set on every subscription this product creates: Razorpay
+    requires a finite `total_count` and we send ten years of cycles. Reading it
+    as a scheduled cancellation told every paying customer their plan was about
+    to end.
+
+    Razorpay reports a real `cancel_at_cycle_end` nowhere on the entity — the
+    cancel call returns 200 and changes no field — so the flag is owned locally
+    and this handler must not derive it.
+    """
+    user = await _sign_in(client, db, "not-cancelling@example.com")
+    await client.post(CHECKOUT, json={"plan": "pro", "interval": "monthly"})
+    subscription = await billing_service.get_subscription(db, user)
+    assert subscription is not None
+
+    far_future = int((utcnow() + timedelta(days=3650)).timestamp())
+    assert (
+        await _post_event(
+            client,
+            _subscription_event(
+                subscription_id=subscription.provider_subscription_id or "sub_test_1",
+                customer_id=subscription.provider_customer_id,
+                user_id=user.id,
+                end_at=far_future,
+            ),
+            event_id="evt_end_at",
+        )
+        == 200
+    )
+
+    await db.refresh(subscription)
+    assert subscription.status is SubscriptionStatus.ACTIVE
+    assert subscription.cancel_at_period_end is False
+
+    body = (await client.get("/api/v1/billing/subscription")).json()["data"]
+    assert body["cancel_at_period_end"] is False
+
+
+# ── Reconciliation ──────────────────────────────────────────────────────────
+
+
+async def test_a_payment_whose_webhook_never_arrived_can_still_be_applied(
+    client: AsyncClient, db: AsyncSession, razorpay: FakeRazorpay, unsigned: None
+) -> None:
+    """The repair path.
+
+    Razorpay creates a subscription before it is paid for, so `activated` is
+    the only thing that says the money moved — and it ships no CLI that
+    forwards webhooks, so locally that delivery is absent rather than merely
+    unreliable. Without this, one lost event is a customer who has paid and an
+    account that never moves.
+    """
+    user = await _sign_in(client, db, "reconcile@example.com")
+    await client.post(CHECKOUT, json={"plan": "pro", "interval": "monthly"})
+    subscription = await billing_service.get_subscription(db, user)
+    assert subscription is not None
+    sub_id = subscription.provider_subscription_id
+    assert sub_id is not None
+
+    await db.refresh(user)
+    assert user.plan is Plan.FREE, "no delivery, no plan — that is the bug being repaired"
+
+    # What Razorpay would say if asked: the mandate was authorized and it is
+    # charging. Nobody told us.
+    razorpay.entities[sub_id] = _subscription_event(
+        subscription_id=sub_id,
+        customer_id=subscription.provider_customer_id,
+        user_id=user.id,
+    )["payload"]["subscription"]["entity"]
+
+    response = await client.post("/api/v1/billing/reconcile")
+    assert response.status_code == 200
+    assert response.json()["data"]["plan"] == "pro"
+
+    await db.refresh(user)
+    assert user.plan is Plan.PRO
+
+
+async def test_reconciling_twice_over_unchanged_state_changes_nothing(
+    client: AsyncClient, db: AsyncSession, razorpay: FakeRazorpay, unsigned: None
+) -> None:
+    """It is a button a worried customer can press repeatedly, so it has to be
+    idempotent — and it has to stay callable, which a bare subscription id as
+    the event key would have broken after the first press."""
+    user = await _sign_in(client, db, "reconcile-twice@example.com")
+    await client.post(CHECKOUT, json={"plan": "pro", "interval": "monthly"})
+    subscription = await billing_service.get_subscription(db, user)
+    assert subscription is not None
+    sub_id = subscription.provider_subscription_id
+    assert sub_id is not None
+    razorpay.entities[sub_id] = _subscription_event(
+        subscription_id=sub_id,
+        customer_id=subscription.provider_customer_id,
+        user_id=user.id,
+    )["payload"]["subscription"]["entity"]
+
+    for _ in range(3):
+        assert (await client.post("/api/v1/billing/reconcile")).status_code == 200
+
+    await db.refresh(user)
+    assert user.plan is Plan.PRO
+    assert razorpay.cancellations == [], "nothing was replaced, so nothing is cancelled"
