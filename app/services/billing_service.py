@@ -1141,7 +1141,14 @@ async def change_seats(
     seats: int,
     organization_id: str | None = None,
 ) -> tuple[int, int]:
-    """Adjust the team's purchased seats, prorated (M21). Owner only.
+    """Adjust the team's purchased seats (M21). Owner only.
+
+    **Not prorated.** The change is scheduled for the end of the billing cycle,
+    because Razorpay does not prorate (D-51) — a mid-cycle seat change would
+    charge a whole cycle again. This said "prorated" while the code below has
+    always sent `schedule_change_at: "cycle_end"`, which is the sort of comment
+    someone later trusts over the code, and it is the same word the UI copy is
+    forbidden from using for exactly this reason.
 
     Returns `(purchased, used)`. The local rows are updated optimistically and
     the webhook confirms — same trust model as every other provider write.

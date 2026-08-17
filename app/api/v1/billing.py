@@ -246,8 +246,11 @@ async def set_cancellation(db: Db, user: CurrentUser, payload: CancellationIn) -
 
 @router.post("/seats", response_model=Envelope[SeatChangeOut], name="update_seats")
 async def update_seats(db: Db, user: CurrentUser, payload: SeatChangeIn) -> dict[str, Any]:
-    """Adjust the team's purchased seats, prorated (M21). Owner only —
-    the one capability the role matrix reserves for the owner alone."""
+    """Adjust the team's purchased seats (M21). Owner only — the one capability
+    the role matrix reserves for the owner alone.
+
+    Takes effect at the end of the billing cycle, not immediately: Razorpay
+    does not prorate (D-51)."""
     seats, used = await billing_service.change_seats(
         db, user, seats=payload.seats, organization_id=payload.organization_id
     )
