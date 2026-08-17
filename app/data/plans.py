@@ -249,7 +249,12 @@ PLANS: Final[tuple[PlanSpec, ...]] = (
         per_seat=False,
         trial_days=0,
         highlights=(
-            "All 28 tools and both workflows",
+            # Was "All 28 tools and both workflows". There are five workflows
+            # plus Stack Architect and Compare Center, and a hardcoded tool
+            # count drifts the moment a spec file is added — this string is
+            # rendered on the public pricing page (M22), where a wrong claim
+            # is a copy-accuracy defect rather than a typo.
+            "Every tool and every workflow",
             "25 tool runs a day",
             "Markdown export on every result",
             "One saved stack",
