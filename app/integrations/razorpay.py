@@ -123,16 +123,27 @@ class LiveRazorpay:
             raise _upstream(action, exc) from exc
 
     async def create_customer(self, *, email: str, name: str, user_id: str) -> str:
-        # `fail_existing=0`: Razorpay 400s on a duplicate email by default, and
-        # a customer who cancelled and came back six months later must land on
-        # the same record or their invoice history splits in two.
+        # `fail_existing="0"`: Razorpay 400s on a duplicate email by default,
+        # and a customer who cancelled and came back six months later must land
+        # on the same record or their invoice history splits in two.
+        #
+        # **The string, not the integer.** Razorpay only honours the flag when
+        # it arrives as `"0"`; an integer `0` is ignored and the request falls
+        # back to the failing default, which comes back as
+        # `Customer already exists for the merchant`. Verified against the live
+        # API — the same call differs only in that quote pair.
+        #
+        # The bug hid because `_ensure_customer` short-circuits whenever the
+        # row already holds a customer id, so this path only runs for an
+        # account that has never had one. That is exactly the returning
+        # customer this flag exists to serve, so the feature had never worked.
         customer = await self._call(
             "customer creation",
             self._client.customer.create,
             {
                 "name": name,
                 "email": email,
-                "fail_existing": 0,
+                "fail_existing": "0",
                 # The link back. Without it, a customer found in the Razorpay
                 # dashboard cannot be traced to an account here without a
                 # database query nobody in support can run.
