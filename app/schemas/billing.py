@@ -57,6 +57,12 @@ class PricingPlanOut(BaseModel):
     #: True for the caller's own plan, so the page can mark it rather than
     #: offering to sell it again.
     current: bool
+    #: True for a plan the caller's own plan already outranks — Pro, seen by
+    #: someone on Team. Separate from `current` because it is a different
+    #: sentence on screen and a different reason: the plan is not theirs, it is
+    #: beneath theirs. Without it the page offered a Team member a Pro checkout
+    #: button, and buying it charged them for a downgrade that granted nothing.
+    included: bool
     features: list[PlanFeatureOut]
     limits: list[PlanLimitOut]
 

@@ -37,7 +37,7 @@ from app.core.config import settings
 from app.core.database import utcnow
 from app.integrations import razorpay as razorpay_integration
 from app.models.billing import BillingEvent, Subscription, SubscriptionStatus
-from app.models.user import Plan, User
+from app.models.user import Plan, PlanSource, User
 from app.services import billing_service
 from tests.conftest import GOOD_PASSWORD, register_and_verify
 
@@ -1165,3 +1165,77 @@ async def test_reconciling_twice_over_unchanged_state_changes_nothing(
     await db.refresh(user)
     assert user.plan is Plan.PRO
     assert razorpay.cancellations == [], "nothing was replaced, so nothing is cancelled"
+
+
+# ── A plan you already outrank ──────────────────────────────────────────────
+#
+# Both of these come from one report: an account on Team through its
+# organization was shown a "Choose Pro" button, bought it, saw nothing change,
+# and was then told "You are already on this plan" — a sentence true of the
+# subscription row and meaningless to the person reading it, arriving only
+# after the charge.
+
+
+async def test_a_plan_beneath_your_own_is_not_offered_for_sale(
+    client: AsyncClient, db: AsyncSession, razorpay: FakeRazorpay
+) -> None:
+    user = await _sign_in(client, db, "outranks-listing@example.com")
+    user.plan = Plan.TEAM
+    await db.commit()
+
+    plans = {p["key"]: p for p in (await client.get("/api/v1/billing/plans")).json()["data"]}
+
+    assert plans["team"]["current"] is True
+    assert plans["team"]["included"] is False, "your own plan is `current`, not `included`"
+    assert plans["pro"]["included"] is True, "Pro sits beneath Team and cannot add anything"
+    assert plans["free"]["included"] is True
+    assert plans["enterprise"]["included"] is False, "above Team, so still purchasable"
+
+
+async def test_buying_beneath_your_own_plan_is_refused_and_says_why(
+    client: AsyncClient, db: AsyncSession, razorpay: FakeRazorpay
+) -> None:
+    user = await _sign_in(client, db, "outranks-checkout@example.com")
+    user.plan = Plan.TEAM
+    user.plan_source = PlanSource.ORGANIZATION
+    await db.commit()
+
+    response = await client.post(CHECKOUT, json={"plan": "pro", "interval": "monthly"})
+
+    assert response.status_code == 409
+    message = response.json()["error"]["message"]
+    # The point of the message is that it names where the current plan comes
+    # from. "You are already on this plan" was technically true and left the
+    # reader with nowhere to go.
+    assert "Team" in message
+    assert "organization" in message
+    assert razorpay.subscriptions == [], "nothing may be created at the provider"
+
+
+async def test_the_same_plan_twice_still_reads_naturally(
+    client: AsyncClient, db: AsyncSession, razorpay: FakeRazorpay
+) -> None:
+    user = await _sign_in(client, db, "outranks-same@example.com")
+    user.plan = Plan.PRO
+    await db.commit()
+
+    response = await client.post(CHECKOUT, json={"plan": "pro", "interval": "monthly"})
+
+    assert response.status_code == 409
+    assert "already on the Pro plan" in response.json()["error"]["message"]
+
+
+async def test_upgrading_above_your_own_plan_is_still_allowed(
+    client: AsyncClient, db: AsyncSession, razorpay: FakeRazorpay
+) -> None:
+    """The guard must not block the thing it sits next to: Pro buying Team."""
+    user = await _sign_in(client, db, "outranks-upgrade@example.com")
+    user.plan = Plan.PRO
+    await db.commit()
+
+    response = await client.post(
+        CHECKOUT, json={"plan": "team", "interval": "monthly", "seats": 3}
+    )
+
+    assert response.status_code == 200
+    assert len(razorpay.subscriptions) == 1

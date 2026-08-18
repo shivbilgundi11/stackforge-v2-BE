@@ -99,6 +99,11 @@ async def list_plans(db: Db, identity: CallerIdentity) -> dict[str, Any]:
                 # much the copy would like to sell it.
                 checkout=spec.checkout and _has_price(spec.plan),
                 current=identity.is_authenticated and identity.plan is spec.plan,
+                included=(
+                    identity.is_authenticated
+                    and identity.plan is not spec.plan
+                    and plan_data.outranks(identity.plan, spec.plan)
+                ),
                 features=[
                     PlanFeatureOut(
                         key=feature.key.value,

@@ -405,9 +405,26 @@ async def start_checkout(
     if seats < 1:
         raise ValidationFailed.on_field("seats", "At least one seat is required.")
 
+    # Compared against the plan the account *has*, not against its personal
+    # subscription alone. A user whose Team access comes from an organization
+    # was shown "You are already on this plan" for a Pro they had never bought
+    # — true of the subscription row, meaningless to the person reading it, and
+    # only after they had already been charged for a plan beneath the one they
+    # were on. `plan_data.outranks` is the same comparison every gate uses.
+    if plan_data.outranks(user.plan, plan):
+        if user.plan is plan:
+            raise Conflict(f"You are already on the {spec.label} plan.")
+        source = (
+            "your organization"
+            if user.plan_source is PlanSource.ORGANIZATION
+            else "your current subscription"
+        )
+        raise Conflict(
+            f"{plan_data.spec_for(user.plan).label} from {source} already includes everything "
+            f"in {spec.label}, so buying it would not add anything."
+        )
+
     subscription = await get_subscription(db, user)
-    if subscription is not None and subscription.is_paid and subscription.plan == plan:
-        raise Conflict("You are already on this plan.")
 
     customer_id = await _ensure_customer(client, subscription, user)
     subscription = await _ensure_row(db, user, subscription, plan=plan, customer_id=customer_id)
