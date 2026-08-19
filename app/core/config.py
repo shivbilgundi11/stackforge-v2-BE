@@ -90,6 +90,14 @@ class Settings(BaseSettings):
     github_client_secret: str = ""
 
     # ── AI ─────────────────────────────────────────────────────────────────
+    #: Synthesis runs on Groq. This key alone decides whether the AI layer is
+    #: live; without it every tool still returns its rule-engine answer.
+    groq_api_key: str = ""
+    #: Not used for generation. The token calculator counts a Claude row in the
+    #: model catalogue with Anthropic's own `count_tokens`, which is the only
+    #: accurate answer for those models and needs a key of its own. Unset means
+    #: the calculator reports `heuristic` for Claude rows and nothing else
+    #: changes.
     anthropic_api_key: str = ""
 
     # ── Exports (M18) ──────────────────────────────────────────────────────
@@ -178,6 +186,16 @@ class Settings(BaseSettings):
 
     @property
     def ai_enabled(self) -> bool:
+        return bool(self.groq_api_key)
+
+    @property
+    def token_counting_enabled(self) -> bool:
+        """Whether Claude rows in the catalogue can be counted exactly.
+
+        Deliberately separate from `ai_enabled`: the two keys buy different
+        things, and a deploy with Groq but no Anthropic key must get full
+        synthesis and an honestly-labelled heuristic token count, not neither.
+        """
         return bool(self.anthropic_api_key)
 
     @property

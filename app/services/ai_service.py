@@ -1,4 +1,4 @@
-"""The only Anthropic client in the process.
+"""The only Groq client in the process.
 
 Routes never call the API. They call a domain service, which calls this. One
 client means one place that knows the request-shape rules, one place that
@@ -13,6 +13,24 @@ fallback one code path instead of a `try/except` copied into eleven endpoints.
 That property is the module (D-06). The rule engine has already produced a
 complete, returnable answer before this is called; AI is a layer over it and
 never a gate in front of it.
+
+The provider is Groq, whose API is OpenAI-shaped: one `chat.completions`
+call, the system prompt as the first message, `response_format` carrying the
+schema, and `reasoning_effort` as the depth knob. Three consequences are worth
+stating rather than discovering:
+
+* **Reasoning tokens are billed as output.** Groq reports them inside
+  `completion_tokens`, so `effort` is a direct lever on spend and every prompt
+  in the registry sits at `low` or `medium` for that reason.
+* **The prompt cache is automatic.** There is no `cache_control` marker to
+  send and no way to ask for one; the provider reuses a recent shared prefix
+  or it does not. That is why the stable-first message order below is the only
+  thing this module does about caching — and why a run reporting zero cached
+  tokens is a miss, not a bug.
+* **`prompt_tokens` includes the cached part**, unlike the provider this
+  module was originally written against. It is split back out in `_usage_of`,
+  because `input_tokens` meaning "the uncached remainder" is what stops a
+  working cache from reading as *more* expensive in the ledger.
 """
 
 from __future__ import annotations
@@ -23,14 +41,14 @@ from collections.abc import Awaitable, Callable
 from decimal import Decimal
 from typing import Any, Final, NamedTuple
 
-import anthropic
-from anthropic import AsyncAnthropic
-from anthropic.types import (
-    MessageParam,
-    OutputConfigParam,
-    TextBlockParam,
-    ThinkingConfigAdaptiveParam,
+import groq
+from groq import AsyncGroq
+from groq.types.chat import (
+    ChatCompletionMessageParam,
+    ChatCompletionSystemMessageParam,
+    ChatCompletionUserMessageParam,
 )
+from groq.types.chat.completion_create_params import ResponseFormatResponseFormatJsonSchema
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import Identity
@@ -48,25 +66,30 @@ logger = get_logger("ai")
 #: request. The deterministic result is already computed and waiting.
 TIMEOUT_SECONDS: Final = 60.0
 
-_client: AsyncAnthropic | None = None
+#: `finish_reason` values that mean the model declined rather than answered.
+#: A declined request is a 200 with no usable content, so it has to be named
+#: here or it arrives as "malformed output" and gets debugged as a bad schema.
+_REFUSAL_REASONS: Final = frozenset({"content_filter", "refusal"})
+
+_client: AsyncGroq | None = None
 
 
-def get_client() -> AsyncAnthropic | None:
+def get_client() -> AsyncGroq | None:
     """The process-wide client, or `None` when no key is configured.
 
     Built lazily so importing this module never needs a key — which is what
-    lets the whole test suite run, and the app boot, with `ANTHROPIC_API_KEY`
+    lets the whole test suite run, and the app boot, with `GROQ_API_KEY`
     unset.
     """
     global _client
     if not settings.ai_enabled:
         return None
     if _client is None:
-        _client = AsyncAnthropic(api_key=settings.anthropic_api_key, timeout=TIMEOUT_SECONDS)
+        _client = AsyncGroq(api_key=settings.groq_api_key, timeout=TIMEOUT_SECONDS)
     return _client
 
 
-def set_client(client: AsyncAnthropic | None) -> None:
+def set_client(client: AsyncGroq | None) -> None:
     """Test seam. Nothing in the app calls this."""
     global _client
     _client = client
@@ -116,6 +139,48 @@ async def _consume_quota(db: AsyncSession, identity: Identity) -> None:
     await feature_service.record(db, identity, Metric.AI_CALLS_PER_DAY)
 
 
+def _response_format(prompt: ai_prompts.Prompt) -> ResponseFormatResponseFormatJsonSchema:
+    """The schema, in the shape the provider enforces it.
+
+    `strict` is the whole point. Without it the schema is a suggestion the
+    model usually follows, and "usually" means a few percent of requests
+    degrade to `rule_based` with nothing separating "the prompt is wrong" from
+    "the model was down".
+    """
+    return {
+        "type": "json_schema",
+        "json_schema": {
+            "name": prompt.purpose,
+            "strict": True,
+            "schema": prompt.schema,
+        },
+    }
+
+
+def _is_throttled(exc: groq.APIStatusError) -> bool:
+    """Whether a non-429 status is really a rate limit.
+
+    Exceeding the per-minute **token** allowance returns `413 Request too
+    large` with `code: rate_limit_exceeded` in the body — a payload-size
+    status for a throughput problem. The SDK maps 413 to a plain status error,
+    so without this the one failure an operator can actually act on (the
+    prompt is too big for the tier) is recorded identically to the provider
+    being down.
+
+    The body code is what is trusted; the status is only a cheap prefilter, so
+    a future status carrying the same code is classified correctly too.
+    """
+    if exc.status_code == 429:
+        return True
+    body: object = exc.body
+    if not isinstance(body, dict):
+        return False
+    error: object = body.get("error")
+    if not isinstance(error, dict):
+        return False
+    return str(error.get("code") or "") == "rate_limit_exceeded"
+
+
 async def generate_json(
     db: AsyncSession,
     *,
@@ -147,45 +212,44 @@ async def generate_json(
         await _record(db, prompt, identity, tool_slug, AiOutcome.QUOTA_EXCEEDED, latency_ms=0)
         return None
 
-    # The stable half of the prompt, marked cacheable. Byte-identical per
-    # purpose, so the second call for a purpose reads it rather than paying
-    # for it — which is why nothing variable may be interpolated into it.
-    system: list[TextBlockParam] = [
-        {
-            "type": "text",
-            "text": prompt.system,
-            "cache_control": {"type": "ephemeral"},
-        }
-    ]
-    # Adaptive thinking, depth controlled by effort. No `budget_tokens`
-    # (removed — a 400 on these models), no `temperature`/`top_p`/`top_k`
-    # (removed likewise), and no assistant prefill (also a 400).
-    thinking: ThinkingConfigAdaptiveParam = {"type": "adaptive"}
-    output_config: OutputConfigParam = {
-        "effort": prompt.effort,  # type: ignore[typeddict-item]
-        "format": {"type": "json_schema", "schema": prompt.schema},
+    # The stable half of the prompt first, byte-identical per purpose; the
+    # rule-engine output that varies per request second. That order is the
+    # only lever there is on the automatic prefix cache — reversing it would
+    # give consecutive requests no shared prefix at all. No assistant prefill:
+    # the last turn must be the user's.
+    system: ChatCompletionSystemMessageParam = {"role": "system", "content": prompt.system}
+    user: ChatCompletionUserMessageParam = {
+        "role": "user",
+        "content": ai_prompts.user_turn(grounding, variables),
     }
-    messages: list[MessageParam] = [
-        {"role": "user", "content": ai_prompts.user_turn(grounding, variables)}
-    ]
+    messages: list[ChatCompletionMessageParam] = [system, user]
 
     started = time.perf_counter()
     try:
-        response = await client.messages.create(
+        response = await client.chat.completions.create(
             model=prompt.model,
-            max_tokens=prompt.max_tokens,
-            system=system,
-            thinking=thinking,
-            output_config=output_config,
+            # `max_completion_tokens`, not `max_tokens`: the latter is
+            # deprecated on this API and does not bound reasoning tokens,
+            # which is the half of the output that actually runs away.
+            max_completion_tokens=prompt.max_tokens,
+            reasoning_effort=prompt.effort,
+            response_format=_response_format(prompt),
             messages=messages,
         )
-    except anthropic.APITimeoutError as exc:
+    except groq.APITimeoutError as exc:
         await _fail(db, prompt, identity, tool_slug, AiOutcome.TIMEOUT, started, exc)
         return None
-    except anthropic.RateLimitError as exc:
+    except groq.RateLimitError as exc:
         await _fail(db, prompt, identity, tool_slug, AiOutcome.RATE_LIMITED, started, exc)
         return None
-    except anthropic.APIError as exc:
+    except groq.APIStatusError as exc:
+        # Not all throttling arrives as a 429 (see `_is_throttled`), and the
+        # ledger exists to answer "why does this not work" — a rate limit
+        # filed under `api_error` sends that investigation to the wrong place.
+        outcome = AiOutcome.RATE_LIMITED if _is_throttled(exc) else AiOutcome.API_ERROR
+        await _fail(db, prompt, identity, tool_slug, outcome, started, exc)
+        return None
+    except groq.APIError as exc:
         await _fail(db, prompt, identity, tool_slug, AiOutcome.API_ERROR, started, exc)
         return None
     except Exception as exc:
@@ -197,11 +261,12 @@ async def generate_json(
 
     latency_ms = int((time.perf_counter() - started) * 1000)
     usage = _usage_of(response)
+    finish_reason = _finish_reason(response)
 
     # Safety classifiers can decline a request and still return a 200. Reading
-    # `content[0]` without checking would raise on an empty list, which is the
-    # one failure mode that would escape this function.
-    if getattr(response, "stop_reason", None) == "refusal":
+    # `choices[0].message.content` without checking would raise on an empty
+    # list, which is the one failure mode that would escape this function.
+    if finish_reason in _REFUSAL_REASONS:
         await _record(
             db,
             prompt,
@@ -210,7 +275,7 @@ async def generate_json(
             AiOutcome.REFUSAL,
             latency_ms=latency_ms,
             usage=usage,
-            detail=_refusal_category(response),
+            detail=f"refusal:{finish_reason}",
         )
         await _consume_quota(db, identity)
         return None
@@ -225,7 +290,7 @@ async def generate_json(
             AiOutcome.INVALID_OUTPUT,
             latency_ms=latency_ms,
             usage=usage,
-            detail=f"stop_reason={getattr(response, 'stop_reason', None)}",
+            detail=f"finish_reason={finish_reason}",
         )
         await _consume_quota(db, identity)
         return None
@@ -345,38 +410,61 @@ def _default_grounding(output: ToolOutput) -> dict[str, Any]:
 
 
 def _usage_of(response: Any) -> dict[str, int]:
-    """Token counts, with cached reads and writes kept separate.
+    """Token counts, in this module's own vocabulary.
 
-    `input_tokens` from the API is the *uncached remainder*; folding the cached
-    figures into it would make a working cache look like it cost more.
+    Groq reports OpenAI-shaped names — `prompt_tokens` and `completion_tokens`
+    — and `completion_tokens` already includes reasoning tokens, which is the
+    figure that matters because they are billed at the output rate.
+
+    `prompt_tokens` is the **whole** prompt, cached part included, so the
+    cached count is subtracted back out: downstream, `input_tokens` means the
+    uncached remainder billed at the full rate, and folding the two together
+    would make a working cache look like it cost more rather than less. The
+    subtraction is clamped, because a provider figure that exceeds the total
+    it is part of should degrade to zero rather than bill a negative.
+
+    `cached_write_tokens` is always zero here. Populating the cache on this
+    provider is automatic and carries no surcharge, so there is nothing to
+    count; the field stays because the ledger has to be able to describe a
+    provider that does charge for it.
     """
     usage = getattr(response, "usage", None)
+    details = getattr(usage, "prompt_tokens_details", None)
+
+    prompt_tokens = int(getattr(usage, "prompt_tokens", 0) or 0)
+    cached = min(int(getattr(details, "cached_tokens", 0) or 0), prompt_tokens)
+
     return {
-        "input_tokens": int(getattr(usage, "input_tokens", 0) or 0),
-        "output_tokens": int(getattr(usage, "output_tokens", 0) or 0),
-        "cached_read_tokens": int(getattr(usage, "cache_read_input_tokens", 0) or 0),
-        "cached_write_tokens": int(getattr(usage, "cache_creation_input_tokens", 0) or 0),
+        "input_tokens": prompt_tokens - cached,
+        "output_tokens": int(getattr(usage, "completion_tokens", 0) or 0),
+        "cached_read_tokens": cached,
+        "cached_write_tokens": 0,
     }
 
 
-def _refusal_category(response: Any) -> str:
-    details = getattr(response, "stop_details", None)
-    return f"refusal:{getattr(details, 'category', None)}"
+def _finish_reason(response: Any) -> str | None:
+    for choice in getattr(response, "choices", None) or []:
+        return str(getattr(choice, "finish_reason", None) or "") or None
+    return None
 
 
 def _first_json(response: Any) -> dict[str, Any] | None:
     """The structured payload, or `None` if there is not one.
 
-    Structured output guarantees the first text block is valid JSON matching
-    the schema — but `max_tokens` truncation and refusals both produce a 200
-    with something else, so this stays defensive.
+    Structured output guarantees the message content is valid JSON matching
+    the schema — but a `length` stop and a refusal both produce a 200 with
+    something else, so this stays defensive.
     """
-    for block in getattr(response, "content", None) or []:
-        if getattr(block, "type", None) != "text":
-            continue
+    for choice in getattr(response, "choices", None) or []:
+        content = getattr(getattr(choice, "message", None), "content", None)
+        # A refusal arrives as a null content with a 200. Named here as well as
+        # in the refusal branch, because a `finish_reason` this module has not
+        # learned about yet must still land on "no JSON", never on a TypeError.
+        if not isinstance(content, str):
+            return None
         try:
-            parsed = json.loads(block.text)
-        except (json.JSONDecodeError, TypeError, AttributeError):
+            parsed = json.loads(content)
+        except json.JSONDecodeError:
             return None
         return parsed if isinstance(parsed, dict) else None
     return None

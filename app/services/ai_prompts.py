@@ -11,20 +11,27 @@ and nothing records what changed.
 
 **The system/user split is load-bearing.** The system text carries the role,
 the grounding rule, and the output contract, and is byte-identical across
-every request for a purpose — so it caches. The rule-engine output that varies
-per request sits in the user turn, after the cache breakpoint. Interpolating
-anything variable into the system text would put it ahead of the breakpoint
-and quietly turn every request into a cache miss.
+every request for a purpose. The rule-engine output that varies per request
+sits in the user turn. Interpolating anything variable into the system text
+would make the instructions differ per request, which is exactly the change
+nobody would notice and nobody could attribute afterwards.
 
-Every schema here obeys the structured-output constraints: `additionalProperties`
-is `false` on every object, nothing recurses, and there are no numeric or
-length constraints (they are not supported and are silently dropped).
+Every schema here obeys the constraints `strict` structured output imposes:
+`additionalProperties` is `false` on every object, every property is listed in
+`required`, nothing recurses, and there are no numeric or length keywords.
+Unlike a prose "reply with JSON" prompt, breaking one of these is a 400 at the
+first call rather than a slow drift in output quality — which is the point.
 """
 
 from __future__ import annotations
 
 import json
-from typing import Any, Final, NamedTuple
+from typing import Any, Final, Literal, NamedTuple
+
+#: The values the provider accepts for `reasoning_effort`. Spelled as a type
+#: rather than checked at the call site: a bad effort is a 400, and the
+#: registry below is the only place one is ever chosen.
+Effort = Literal["low", "medium", "high"]
 
 #: Bumped whenever any prompt text or schema below changes. One version for
 #: the registry rather than one per prompt: the interesting question is "which
@@ -34,19 +41,60 @@ PROMPT_VERSION: Final = "v1"
 
 # Models, by what the call is for. Named here rather than at the call site so
 # a re-tier is one edit — and so nothing in a route can pick a model.
-OPUS: Final = "claude-opus-5"
-SONNET: Final = "claude-sonnet-5"
-HAIKU: Final = "claude-haiku-4-5"
+#
+# These are Groq-hosted ids. Only the `gpt-oss` family is used: on this
+# provider it is the family that supports both `response_format: json_schema`
+# with `strict` and a `reasoning_effort` knob, and the whole request shape
+# below depends on having both.
+
+#: The heavy tier — judgement calls the user will check line by line.
+LARGE: Final = "openai/gpt-oss-120b"
+#: The default. Same family, same guarantees, a third of the price; every
+#: call here writes a few hundred words over grounding that is already right.
+MEDIUM: Final = "openai/gpt-oss-120b"
+#: Short single-paragraph rationales, where the smaller model is
+#: indistinguishable and roughly twice as fast.
+SMALL: Final = "openai/gpt-oss-20b"
+
+
+#: The tokens-per-minute allowance of the smallest tier this runs on.
+#:
+#: It is here rather than in a config file because it constrains the numbers
+#: directly below it, and a limit kept somewhere else is one nobody consults
+#: before raising a `max_tokens`.
+TIER_TOKENS_PER_MINUTE: Final = 8_000
+
+#: Headroom for the system prompt plus the grounding payload, measured from a
+#: real `stack-architect` run — the largest grounding any prompt here sends.
+GROUNDING_ALLOWANCE: Final = 4_500
+
+#: What a prompt may therefore reserve. The provider charges the reservation
+#: against the allowance whether or not it is used, so this is a real ceiling
+#: and not a guideline: exceeding it does not make the call expensive, it
+#: makes the call impossible.
+MAX_OUTPUT_RESERVATION: Final = TIER_TOKENS_PER_MINUTE - GROUNDING_ALLOWANCE
 
 
 class Prompt(NamedTuple):
     purpose: str
     model: str
-    #: `low` | `medium` | `high` | `xhigh` | `max`. Every call here is a short,
+    #: Passed through as `reasoning_effort`. Every call here is a short,
     #: bounded piece of writing over grounding that is already computed, so
     #: none of them need the top of the ladder — and effort is the main lever
-    #: on both latency and spend.
-    effort: str
+    #: on both latency and spend, because reasoning tokens are billed at the
+    #: output rate.
+    effort: Effort
+    #: The **reservation**, not a prediction. Groq charges this against the
+    #: per-minute token allowance whether or not it is used, so padding it is
+    #: not free the way it was on a provider that billed only what came back:
+    #: an 8,000-token reservation on a 4,000-token prompt is a 12,000-token
+    #: request, which is how the flagship tool came to fail outright on a tier
+    #: whose limit is 8,000.
+    #:
+    #: Sized at roughly four times the observed output, which leaves room for
+    #: a long answer and for the reasoning tokens that count against the same
+    #: budget, while keeping prompt + reservation inside a small tier. Too low
+    #: truncates and degrades to `rule_based`; too high never runs at all.
     max_tokens: int
     system: str
     schema: dict[str, Any]
@@ -96,9 +144,9 @@ def _system(role: str) -> str:
 
 STACK_SYNTHESIS: Final = Prompt(
     purpose="stack_synthesis",
-    model=OPUS,
+    model=LARGE,
     effort="medium",
-    max_tokens=8000,
+    max_tokens=3000,
     system=_system(
         "For this call: the engine has ranked candidate stacks and scored every "
         "dimension. Choose which of the ranked candidates to recommend — you may "
@@ -132,9 +180,9 @@ STACK_SYNTHESIS: Final = Prompt(
 
 ROADMAP: Final = Prompt(
     purpose="roadmap",
-    model=SONNET,
+    model=MEDIUM,
     effort="low",
-    max_tokens=4000,
+    max_tokens=3000,
     system=_system(
         "For this call: write a five-step implementation roadmap for the stack the "
         "engine selected. Each step names what is built, roughly how long it takes "
@@ -164,7 +212,7 @@ ROADMAP: Final = Prompt(
 
 RAG_ARCHITECTURE: Final = Prompt(
     purpose="rag_architecture",
-    model=SONNET,
+    model=MEDIUM,
     effort="low",
     max_tokens=3000,
     system=_system(
@@ -181,7 +229,7 @@ RAG_ARCHITECTURE: Final = Prompt(
 
 AGENT_PLAN: Final = Prompt(
     purpose="agent_plan",
-    model=SONNET,
+    model=MEDIUM,
     effort="low",
     max_tokens=3000,
     system=_system(
@@ -198,9 +246,9 @@ AGENT_PLAN: Final = Prompt(
 
 ARCHITECTURE_DOCUMENT: Final = Prompt(
     purpose="architecture_document",
-    model=OPUS,
+    model=LARGE,
     effort="medium",
-    max_tokens=8000,
+    max_tokens=3000,
     system=_system(
         "For this call: write the prose sections of an architecture document for "
         "the selected stack — an overview, the reasoning behind each major choice, "
@@ -215,7 +263,7 @@ ARCHITECTURE_DOCUMENT: Final = Prompt(
 
 COMPATIBILITY_RATIONALE: Final = Prompt(
     purpose="compatibility_rationale",
-    model=HAIKU,
+    model=SMALL,
     effort="low",
     max_tokens=1500,
     system=_system(
@@ -227,7 +275,7 @@ COMPATIBILITY_RATIONALE: Final = Prompt(
 
 COMPARISON_RATIONALE: Final = Prompt(
     purpose="comparison_rationale",
-    model=HAIKU,
+    model=SMALL,
     effort="low",
     max_tokens=1500,
     system=_system(
@@ -240,7 +288,7 @@ COMPARISON_RATIONALE: Final = Prompt(
 
 COST_OPTIMIZATION: Final = Prompt(
     purpose="cost_optimization",
-    model=HAIKU,
+    model=SMALL,
     effort="low",
     max_tokens=1500,
     system=_system(

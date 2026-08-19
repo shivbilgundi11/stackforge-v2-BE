@@ -13,6 +13,13 @@ undercounts Claude by 15-20% on prose and far more on code. Anthropic models
 go to `count_tokens`, which is the only accurate answer, and which is why this
 module needs a client at all.
 
+That client is Anthropic's, and it is the only one in the process — synthesis
+runs on Groq (`ai_service`) and Groq publishes no token-counting endpoint.
+The two are deliberately not the same key and not the same object: this one is
+a measuring instrument for a **catalogue row the user picked**, not a model we
+generate with, and a deploy may reasonably have one key and not the other. Its
+absence costs a labelled `heuristic` and nothing else.
+
 `method` is returned to the caller and goes on the API response, not into a
 log line. The person reaching for a token calculator is exactly the person who
 needs to know whether the number is measured or estimated — a calculator that
@@ -25,11 +32,15 @@ import asyncio
 import math
 from typing import Any, Final, NamedTuple
 
+from app.core.config import settings
 from app.core.logging import get_logger
 from app.schemas.catalog import ModelOut
-from app.services import ai_service
 
 logger = get_logger("tokenizer")
+
+#: Counting is a fast, bounded call on a text box the user is still typing in.
+#: A slow one has already lost its race with the next keystroke.
+COUNT_TIMEOUT_SECONDS: Final = 10.0
 
 #: ~4 characters per token for English prose, with a word-based floor that
 #: catches code and URLs the character rule under-counts. Only ever used when
@@ -47,6 +58,8 @@ _hf_cache: dict[str, Any] = {}
 #: one bad seed row into a per-request network timeout.
 _hf_failed: set[str] = set()
 _tiktoken_cache: dict[str, Any] = {}
+#: The Anthropic client, built lazily and only for `count_tokens`.
+_anthropic_client: Any = None
 
 
 class TokenCount(NamedTuple):
@@ -93,6 +106,30 @@ def _tiktoken_count(text: str, encoding_name: str) -> TokenCount:
         return heuristic(text)
 
 
+def get_anthropic_client() -> Any:
+    """The process-wide counting client, or `None` with no key.
+
+    Built lazily so importing this module never needs a key — the same rule
+    `ai_service` follows, for the same reason.
+    """
+    global _anthropic_client
+    if not settings.token_counting_enabled:
+        return None
+    if _anthropic_client is None:
+        from anthropic import AsyncAnthropic
+
+        _anthropic_client = AsyncAnthropic(
+            api_key=settings.anthropic_api_key, timeout=COUNT_TIMEOUT_SECONDS
+        )
+    return _anthropic_client
+
+
+def set_anthropic_client(client: Any) -> None:
+    """Test seam. Nothing in the app calls this."""
+    global _anthropic_client
+    _anthropic_client = client
+
+
 async def _anthropic_count(text: str, model: ModelOut | None) -> TokenCount:
     """The provider's own count. Nothing local is accurate for these models.
 
@@ -100,7 +137,7 @@ async def _anthropic_count(text: str, model: ModelOut | None) -> TokenCount:
     guessing with someone else's tokenizer would be worse than saying so —
     the heuristic at least reports itself.
     """
-    client = ai_service.get_client()
+    client = get_anthropic_client()
     if client is None:
         return heuristic(text)
 
@@ -138,6 +175,8 @@ def _hf_count(text: str, repo: str) -> TokenCount:
 
 def reset_caches() -> None:
     """Test seam."""
+    global _anthropic_client
     _hf_cache.clear()
     _hf_failed.clear()
     _tiktoken_cache.clear()
+    _anthropic_client = None

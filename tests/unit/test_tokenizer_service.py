@@ -15,7 +15,7 @@ import pytest
 
 from app.core.config import settings
 from app.schemas.catalog import ModelOut, ProvenanceOut
-from app.services import ai_service, tokenizer_service
+from app.services import tokenizer_service
 
 SAMPLE = "The quick brown fox jumps over the lazy dog. " * 20
 
@@ -23,10 +23,8 @@ SAMPLE = "The quick brown fox jumps over the lazy dog. " * 20
 @pytest.fixture(autouse=True)
 def _clean():
     tokenizer_service.reset_caches()
-    ai_service.set_client(None)
     yield
     tokenizer_service.reset_caches()
-    ai_service.set_client(None)
 
 
 def _model(model_id: str, tokenizer: str | None) -> ModelOut:
@@ -82,7 +80,7 @@ async def test_a_claude_model_is_counted_by_the_provider_not_by_tiktoken(
             seen.update(kwargs)
             return SimpleNamespace(input_tokens=4242)
 
-    ai_service.set_client(SimpleNamespace(messages=_Messages()))
+    tokenizer_service.set_anthropic_client(SimpleNamespace(messages=_Messages()))
 
     result = await tokenizer_service.count(SAMPLE, model=_model("claude-opus-5", "anthropic:api"))
 
@@ -92,9 +90,27 @@ async def test_a_claude_model_is_counted_by_the_provider_not_by_tiktoken(
 
 
 async def test_a_claude_model_without_a_key_falls_back_and_says_so() -> None:
+    """Counting is the only thing the Anthropic key still buys - synthesis
+    moved to Groq - so its absence has to cost a labelled heuristic and
+    nothing else."""
     result = await tokenizer_service.count(SAMPLE, model=_model("claude-opus-5", "anthropic:api"))
 
     assert result.method == tokenizer_service.ESTIMATED
+
+
+async def test_counting_does_not_ride_on_the_generation_key(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The two keys buy different things from different vendors. A deploy with
+    Groq and no Anthropic key must get full synthesis and an honest heuristic
+    here, not a crash from calling `count_tokens` on a Groq client."""
+    monkeypatch.setattr(settings, "groq_api_key", "gsk-test")
+    monkeypatch.setattr(settings, "anthropic_api_key", "")
+
+    result = await tokenizer_service.count(SAMPLE, model=_model("claude-opus-5", "anthropic:api"))
+
+    assert result.method == tokenizer_service.ESTIMATED
+    assert result.tokens > 0
 
 
 async def test_a_provider_error_degrades_rather_than_failing_the_request(
@@ -106,7 +122,7 @@ async def test_a_provider_error_degrades_rather_than_failing_the_request(
         async def count_tokens(self, **kwargs: Any) -> Any:
             raise RuntimeError("upstream is down")
 
-    ai_service.set_client(SimpleNamespace(messages=_Messages()))
+    tokenizer_service.set_anthropic_client(SimpleNamespace(messages=_Messages()))
 
     result = await tokenizer_service.count(SAMPLE, model=_model("claude-opus-5", "anthropic:api"))
     assert result.method == tokenizer_service.ESTIMATED
