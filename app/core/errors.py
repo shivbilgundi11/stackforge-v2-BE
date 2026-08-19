@@ -141,11 +141,24 @@ class RateLimited(AppError):
     http_status = 429
     default_message = "Too many requests."
 
-    def __init__(self, retry_after: int, message: str | None = None) -> None:
+    def __init__(
+        self,
+        retry_after: int,
+        message: str | None = None,
+        budget: dict[str, str] | None = None,
+    ) -> None:
+        """`budget` carries the `X-RateLimit-*` trio onto the refusal.
+
+        It has to be passed through the exception rather than set on the
+        injected `Response`: raising discards that object, and the handler
+        builds a fresh `JSONResponse` from `exc.headers` alone. Without this
+        the one response where a client most needs to know its limit and reset
+        time is the only one that does not carry them.
+        """
         super().__init__(
             message,
             details={"retry_after": retry_after},
-            headers={"Retry-After": str(retry_after)},
+            headers={"Retry-After": str(retry_after), **(budget or {})},
         )
 
 

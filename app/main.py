@@ -11,6 +11,7 @@ from fastapi.responses import JSONResponse
 from sqlalchemy.exc import IntegrityError
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
+from app.api.deps import ReadLimit, ToolRunLimit
 from app.api.v1 import agents as agents_router
 from app.api.v1 import architect as architect_router
 from app.api.v1 import auth as auth_router
@@ -179,33 +180,48 @@ async def handle_unexpected(_request: Request, exc: Exception) -> JSONResponse:
 
 
 # ── Routes ──────────────────────────────────────────────────────────────────
+#
+# Rate limits are attached per router rather than per route (M23), so a new
+# endpoint inherits its class's limit instead of quietly having none. Three
+# routers carry no limit on purpose:
+#
+#   health   — a limited liveness probe is an outage that restarts containers
+#   auth     — M03 owns a stricter policy of its own, keyed on the credential
+#   billing  — it holds the Razorpay webhook, and throttling a provider's
+#              retries turns a transient failure into a lost payment
+#
+# `ToolRunLimit` is the hourly ceiling for paid plans only. Anonymous and Free
+# callers are bounded far more tightly by the daily allowance in `plan_quotas`,
+# so this layer deliberately leaves them to it.
 
 app.include_router(health_router.router)
 app.include_router(auth_router.router, prefix="/api/v1/auth")
-app.include_router(catalog_router.router, prefix="/api/v1/catalog")
-app.include_router(cost_router.router, prefix="/api/v1/tools/cost")
-app.include_router(compare_router.router, prefix="/api/v1/tools/compare")
-app.include_router(agents_router.router, prefix="/api/v1/tools/agents")
-app.include_router(infra_router.router, prefix="/api/v1/tools/infra")
-app.include_router(rag_router.router, prefix="/api/v1/tools/rag")
-app.include_router(roi_router.router, prefix="/api/v1/tools/roi")
-app.include_router(architect_router.router, prefix="/api/v1/architect")
-app.include_router(stacks_router.router, prefix="/api/v1/stacks")
-app.include_router(runs_router.router, prefix="/api/v1/runs")
-app.include_router(projects_router.router, prefix="/api/v1/projects")
-app.include_router(exports_router.router, prefix="/api/v1/exports")
-app.include_router(templates_router.router, prefix="/api/v1/templates")
+app.include_router(catalog_router.router, prefix="/api/v1/catalog", dependencies=[ReadLimit])
+app.include_router(cost_router.router, prefix="/api/v1/tools/cost", dependencies=[ToolRunLimit])
+app.include_router(
+    compare_router.router, prefix="/api/v1/tools/compare", dependencies=[ToolRunLimit]
+)
+app.include_router(agents_router.router, prefix="/api/v1/tools/agents", dependencies=[ToolRunLimit])
+app.include_router(infra_router.router, prefix="/api/v1/tools/infra", dependencies=[ToolRunLimit])
+app.include_router(rag_router.router, prefix="/api/v1/tools/rag", dependencies=[ToolRunLimit])
+app.include_router(roi_router.router, prefix="/api/v1/tools/roi", dependencies=[ToolRunLimit])
+app.include_router(architect_router.router, prefix="/api/v1/architect", dependencies=[ToolRunLimit])
+app.include_router(stacks_router.router, prefix="/api/v1/stacks", dependencies=[ReadLimit])
+app.include_router(runs_router.router, prefix="/api/v1/runs", dependencies=[ReadLimit])
+app.include_router(projects_router.router, prefix="/api/v1/projects", dependencies=[ReadLimit])
+app.include_router(exports_router.router, prefix="/api/v1/exports", dependencies=[ReadLimit])
+app.include_router(templates_router.router, prefix="/api/v1/templates", dependencies=[ReadLimit])
 app.include_router(billing_router.router, prefix="/api/v1/billing")
 # Mounted at the version root rather than under a prefix: this router owns both
 # `/shares` (owner, authenticated) and `/s/{token}` (public, unauthenticated),
 # and the public path is deliberately short — it is pasted into chat messages.
-app.include_router(shares_router.router, prefix="/api/v1")
-app.include_router(workspace_router.router, prefix="/api/v1")
+app.include_router(shares_router.router, prefix="/api/v1", dependencies=[ReadLimit])
+app.include_router(workspace_router.router, prefix="/api/v1", dependencies=[ReadLimit])
 # Owns both /organizations and /invitations — the accept flow's credential is
 # the token, not a membership, so it lives outside the /organizations tree.
-app.include_router(organizations_router.router, prefix="/api/v1")
+app.include_router(organizations_router.router, prefix="/api/v1", dependencies=[ReadLimit])
 # Owns /comments and /approvals — the org is resolved from the resource.
-app.include_router(collaboration_router.router, prefix="/api/v1")
+app.include_router(collaboration_router.router, prefix="/api/v1", dependencies=[ReadLimit])
 
 
 @app.get("/", include_in_schema=False)

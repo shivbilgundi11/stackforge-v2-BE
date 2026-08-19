@@ -7,12 +7,14 @@ inline check can.
 
 from __future__ import annotations
 
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import Annotated
 
 from fastapi import Depends, Request, Response
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core import rate_limit
 from app.core.config import settings
 from app.core.context import bind
 from app.core.database import get_session
@@ -20,6 +22,7 @@ from app.core.errors import (
     EmailNotVerified,
     Forbidden,
     PlanRequired,
+    RateLimited,
     TokenInvalid,
     Unauthenticated,
 )
@@ -353,3 +356,85 @@ OrgViewer = Annotated[OrgContext, require_org_role(OrgRole.VIEWER)]
 OrgEditor = Annotated[OrgContext, require_org_role(OrgRole.MEMBER)]
 OrgAdmin = Annotated[OrgContext, require_org_role(OrgRole.ADMIN)]
 OrgOwner = Annotated[OrgContext, require_org_role(OrgRole.OWNER)]
+
+# ── Rate limiting (M23) ─────────────────────────────────────────────────────
+
+
+def _rate_limit_key(identity: Identity, request: Request) -> str:
+    """`user_id` → `anon_id` → IP, in that order.
+
+    Identity before IP because IP-keyed limits break behind corporate NAT and
+    shared Wi-Fi, which is where a good share of this audience works — one
+    office would share a single allowance (D-14 makes the same argument for
+    quota). IP is the last resort for a caller with neither, which in practice
+    means an endpoint reached before a session cookie exists.
+
+    **Known limit of this precedence.** Anonymous sessions are free to mint,
+    so a client that discards its cookie is a new identity with a fresh
+    allowance. That is inherent to keying on identity ahead of IP, and it is
+    the same hole the anonymous *quota* has had since D-14 — which accepted it
+    knowingly, because an IP-keyed allowance shared by everyone in one office
+    is the worse failure. Closing it means proof-of-work or an account, not a
+    different key here.
+    """
+    if identity.user:
+        return f"u:{identity.user.id}"
+    if identity.anonymous_id:
+        return f"a:{identity.anonymous_id}"
+    return f"ip:{_client_ip(request)}"
+
+
+def _client_ip(request: Request) -> str:
+    """The left-most `X-Forwarded-For` entry, or the socket peer.
+
+    Only trusted because the API sits behind a proxy that overwrites the
+    header. Read straight from `request.client` instead and every caller
+    behind that proxy shares one allowance; trust it in a deploy without a
+    proxy and any caller can spoof a fresh allowance per request.
+    """
+    forwarded = request.headers.get("X-Forwarded-For", "")
+    if forwarded:
+        first = forwarded.split(",")[0].strip()
+        if first:
+            return first
+    client = request.client
+    return client.host if client else "unknown"
+
+
+def rate_limited(klass: rate_limit.RateLimitClass) -> Callable[..., Awaitable[None]]:
+    """Build the dependency enforcing one policy class on a route.
+
+    A dependency rather than middleware so it composes per route: health and
+    the payment webhooks must not be limited, and a middleware would need a
+    path allow-list that drifts from the routes it names.
+
+    Keyed on `CallerIdentity`, never `RunIdentity`. The latter *mints* an
+    anonymous session and sets a cookie when there is none — which is correct
+    before a tool run that has to be attributed, and quite wrong as a side
+    effect of counting a request. Applied to a read router it would hand a
+    session cookie to every crawler that touches a public share link.
+    """
+
+    async def enforce(request: Request, response: Response, identity: CallerIdentity) -> None:
+        decision = await rate_limit.check(
+            klass,
+            identity_key=_rate_limit_key(identity, request),
+            plan=identity.plan if identity.is_authenticated else None,
+        )
+        if decision is None:
+            return
+
+        # On the success path too, not only the refusal. A client that learns
+        # its budget only by being refused finds out when it is already too
+        # late to slow down.
+        response.headers.update(decision.headers())
+        if not decision.allowed:
+            raise RateLimited(decision.retry_after, budget=decision.headers())
+
+    return enforce
+
+
+#: The two classes the contract names. Applied at the router, not per route,
+#: so a new endpoint inherits a limit instead of quietly having none.
+ReadLimit = Depends(rate_limited(rate_limit.READ))
+ToolRunLimit = Depends(rate_limited(rate_limit.TOOL_RUN))
