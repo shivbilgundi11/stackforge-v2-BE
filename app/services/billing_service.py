@@ -657,6 +657,7 @@ async def process_event(db: AsyncSession, record: BillingEvent) -> str:
     """Apply one event. Raises on failure; the caller records that."""
     payload = record.payload if isinstance(record.payload, dict) else {}
     obj = _event_object(payload)
+    event_at = _timestamp(payload.get("created_at"))
 
     match record.type:
         case (
@@ -675,7 +676,7 @@ async def process_event(db: AsyncSession, record: BillingEvent) -> str:
             # the event type adds nothing the object does not already say — and
             # branching on the type would mean nine handlers that each have to
             # agree about what the object means.
-            detail = await _on_subscription_changed(db, obj)
+            detail = await _on_subscription_changed(db, obj, event_at=event_at)
         case _:
             # Recorded and marked done. Razorpay sends dozens of types this
             # product has no opinion on, and retrying them forever would fill
@@ -716,7 +717,9 @@ def _event_object(payload: dict[str, Any]) -> dict[str, Any]:
 # event carries the same one. Attachment is not a step on this provider.
 
 
-async def _on_subscription_changed(db: AsyncSession, obj: dict[str, Any]) -> str:
+async def _on_subscription_changed(
+    db: AsyncSession, obj: dict[str, Any], *, event_at: datetime | None
+) -> str:
     """The workhorse. Every subscription event lands here.
 
     Everything is read from the object as it is *now* rather than diffed
@@ -727,6 +730,19 @@ async def _on_subscription_changed(db: AsyncSession, obj: dict[str, Any]) -> str
     subscription = await _resolve_subscription(db, obj)
     if subscription is None:
         return "no matching subscription"
+
+    if (
+        event_at is not None
+        and subscription.provider_event_at is not None
+        and event_at < subscription.provider_event_at
+    ):
+        logger.info(
+            "billing.stale_subscription_event",
+            subscription_id=subscription.id,
+            event_at=event_at,
+            latest_event_at=subscription.provider_event_at,
+        )
+        return "stale subscription event"
 
     incoming_id = obj.get("id") if isinstance(obj.get("id"), str) else None
     live_id = subscription.provider_subscription_id
@@ -772,6 +788,8 @@ async def _on_subscription_changed(db: AsyncSession, obj: dict[str, Any]) -> str
     was_past_due = subscription.status is SubscriptionStatus.PAST_DUE
 
     subscription.status = status
+    if event_at is not None:
+        subscription.provider_event_at = event_at
     if provider_plan_id:
         subscription.provider_plan_id = provider_plan_id
     if plan is not None:

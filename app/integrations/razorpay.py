@@ -331,12 +331,20 @@ def verify_signature(payload: bytes, signature: str | None) -> dict[str, Any]:
     if not signature:
         raise UpstreamError("Missing Razorpay signature.")
 
-    expected = hmac.new(
-        settings.razorpay_webhook_secret.encode(), payload, hashlib.sha256
-    ).hexdigest()
+    secrets = (
+        settings.razorpay_webhook_secret,
+        settings.razorpay_webhook_previous_secret,
+    )
     # Constant time: a byte-by-byte comparison leaks how much of a forged
     # signature was right, which is enough to construct one.
-    if not hmac.compare_digest(expected, signature):
+    matches = [
+        hmac.compare_digest(
+            hmac.new(secret.encode(), payload, hashlib.sha256).hexdigest(), signature
+        )
+        for secret in secrets
+        if secret
+    ]
+    if not any(matches):
         logger.warning("razorpay.webhook_bad_signature")
         raise UpstreamError("Signature verification failed.")
 

@@ -19,7 +19,7 @@ from app.core.logging import get_logger
 
 logger = get_logger("auth.password")
 
-MIN_LENGTH = 12
+MIN_LENGTH = 8
 MAX_LENGTH = 256  # Argon2 will hash anything; a 1MB password is a DoS vector.
 
 _hasher = PasswordHasher(
@@ -89,6 +89,14 @@ async def validate_password(password: str, *, email: str | None = None) -> None:
         problems.append(f"Use at least {MIN_LENGTH} characters.")
     if len(password) > MAX_LENGTH:
         problems.append(f"Use at most {MAX_LENGTH} characters.")
+    if not any(char.islower() for char in password):
+        problems.append("Include at least one lowercase letter.")
+    if not any(char.isupper() for char in password):
+        problems.append("Include at least one uppercase letter.")
+    if not any(char.isdigit() for char in password):
+        problems.append("Include at least one number.")
+    if not any(not char.isalnum() and not char.isspace() for char in password):
+        problems.append("Include at least one symbol.")
 
     lowered = password.lower()
     if lowered in _COMMON:

@@ -15,6 +15,8 @@ import pytest
 from app.core.errors import ValidationFailed
 from app.services import password_service
 
+PASSWORD = "Correct-horse-battery-staple-42!"
+
 
 class _MockResponse:
     def __init__(self, text: str) -> None:
@@ -54,7 +56,7 @@ def _enable_hibp(monkeypatch: pytest.MonkeyPatch) -> None:
 async def test_only_the_hash_prefix_leaves_the_process(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    password = "correct-horse-battery-staple"
+    password = PASSWORD
     digest = hashlib.sha1(password.encode(), usedforsecurity=False).hexdigest().upper()
 
     _MockClient.body = ""
@@ -68,7 +70,7 @@ async def test_only_the_hash_prefix_leaves_the_process(
 
 
 async def test_breached_password_is_detected(monkeypatch: pytest.MonkeyPatch) -> None:
-    password = "correct-horse-battery-staple"
+    password = PASSWORD
     digest = hashlib.sha1(password.encode(), usedforsecurity=False).hexdigest().upper()
 
     _MockClient.body = f"AAAAAAAAAA:1\r\n{digest[5:]}:42\r\nBBBBBBBBBB:7"
@@ -85,13 +87,13 @@ async def test_unbreached_password_passes(monkeypatch: pytest.MonkeyPatch) -> No
     _MockClient.body = "AAAAAAAAAA:1\r\nBBBBBBBBBB:7"
     monkeypatch.setattr(httpx, "AsyncClient", _MockClient)
 
-    assert await password_service._is_breached("correct-horse-battery-staple") is False
-    await password_service.validate_password("correct-horse-battery-staple")
+    assert await password_service._is_breached(PASSWORD) is False
+    await password_service.validate_password(PASSWORD)
 
 
 async def test_zero_count_is_not_a_breach(monkeypatch: pytest.MonkeyPatch) -> None:
     """The padded responses HIBP returns include decoy suffixes with count 0."""
-    password = "correct-horse-battery-staple"
+    password = PASSWORD
     digest = hashlib.sha1(password.encode(), usedforsecurity=False).hexdigest().upper()
 
     _MockClient.body = f"{digest[5:]}:0"
@@ -109,8 +111,8 @@ async def test_outage_fails_open(monkeypatch: pytest.MonkeyPatch) -> None:
 
     monkeypatch.setattr(httpx, "AsyncClient", _Broken)
 
-    assert await password_service._is_breached("correct-horse-battery-staple") is False
-    await password_service.validate_password("correct-horse-battery-staple")
+    assert await password_service._is_breached(PASSWORD) is False
+    await password_service.validate_password(PASSWORD)
 
 
 async def test_disabled_skips_the_network_entirely(
@@ -123,4 +125,4 @@ async def test_disabled_skips_the_network_entirely(
             raise AssertionError("no request should be made when HIBP is disabled")
 
     monkeypatch.setattr(httpx, "AsyncClient", _Exploding)
-    await password_service.validate_password("correct-horse-battery-staple")
+    await password_service.validate_password(PASSWORD)

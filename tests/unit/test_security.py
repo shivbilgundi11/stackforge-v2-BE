@@ -45,13 +45,27 @@ class TestPasswordHashing:
 
 class TestPasswordPolicy:
     async def test_accepts_a_reasonable_password(self) -> None:
-        await password_service.validate_password("correct-horse-battery-staple")
+        await password_service.validate_password("Correct-horse1!")
 
     async def test_rejects_short(self) -> None:
         with pytest.raises(ValidationFailed) as exc:
             await password_service.validate_password("short")
         assert exc.value.details is not None
         assert exc.value.details["fields"][0]["path"] == "password"
+
+    @pytest.mark.parametrize(
+        "password",
+        (
+            "correct-horse1!",
+            "CORRECT-HORSE1!",
+            "Correct-horse!",
+            "Correcthorse1",
+            "Correct horse1",
+        ),
+    )
+    async def test_requires_each_password_character_class(self, password: str) -> None:
+        with pytest.raises(ValidationFailed):
+            await password_service.validate_password(password)
 
     async def test_rejects_common(self) -> None:
         with pytest.raises(ValidationFailed):
@@ -60,13 +74,13 @@ class TestPasswordPolicy:
     async def test_rejects_password_containing_email_local_part(self) -> None:
         with pytest.raises(ValidationFailed):
             await password_service.validate_password(
-                "adalovelace-is-me", email="adalovelace@example.com"
+                "Adalovelace1!", email="adalovelace@example.com"
             )
 
     async def test_short_local_part_does_not_trigger(self) -> None:
         """A two-character local part appears in almost any string; matching on
         it would reject valid passwords."""
-        await password_service.validate_password("correct-horse-battery", email="ad@example.com")
+        await password_service.validate_password("Correct-horse1!", email="ad@example.com")
 
 
 class TestAccessTokens:

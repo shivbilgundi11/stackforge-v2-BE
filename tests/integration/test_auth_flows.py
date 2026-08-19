@@ -18,7 +18,7 @@ from app.integrations.email import ConsoleSender
 from app.models.auth import AuthEvent, AuthEventType, Session
 from app.models.user import User
 
-PASSWORD = "correct-horse-battery-staple-42"
+PASSWORD = "Correct-horse-battery-staple-42!"
 BASE = "/api/v1/auth"
 
 
@@ -347,7 +347,7 @@ class TestPasswordReset:
         await client.post(f"{BASE}/forgot-password", json={"email": "ada@example.com"})
 
         token = token_from(outbox, "reset")
-        new_password = "an-entirely-different-passphrase"
+        new_password = "An-entirely-different-passphrase1!"
 
         response = await client.post(
             f"{BASE}/reset-password", json={"token": token, "password": new_password}
@@ -378,10 +378,10 @@ class TestPasswordReset:
         token = token_from(outbox, "reset")
 
         await client.post(
-            f"{BASE}/reset-password", json={"token": token, "password": "first-new-passphrase"}
+            f"{BASE}/reset-password", json={"token": token, "password": "First-new-passphrase1!"}
         )
         second = await client.post(
-            f"{BASE}/reset-password", json={"token": token, "password": "second-new-passphrase"}
+            f"{BASE}/reset-password", json={"token": token, "password": "Second-new-passphrase1!"}
         )
         assert second.status_code == 401
 
@@ -402,7 +402,7 @@ class TestPasswordChange:
 
         response = await client.patch(
             f"{BASE}/password",
-            json={"current_password": PASSWORD, "new_password": "a-brand-new-passphrase"},
+            json={"current_password": PASSWORD, "new_password": "A-brand-new-passphrase1!"},
             headers=headers,
         )
         assert response.status_code == 200

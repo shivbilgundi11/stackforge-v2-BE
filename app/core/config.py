@@ -118,6 +118,9 @@ class Settings(BaseSettings):
     #: bodies is an unauthenticated "make me Pro" endpoint, so an unset secret
     #: rejects rather than waves through.
     razorpay_webhook_secret: str = ""
+    #: Kept only while Razorpay retries deliveries signed before a secret
+    #: rotation. It never enables billing on its own.
+    razorpay_webhook_previous_secret: str = ""
     #: Plan ids, created by `python -m app.cli razorpay-sync` rather than in the
     #: dashboard, so environments are reproducible. Empty means that plan
     #: cannot be checked out in this environment.

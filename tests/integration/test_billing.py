@@ -162,6 +162,7 @@ def _subscription_event(
     start_at: int | None = None,
     end_at: int | None = None,
     quantity: int = 1,
+    created_at: int | None = None,
 ) -> dict[str, Any]:
     """One Razorpay webhook body.
 
@@ -193,7 +194,7 @@ def _subscription_event(
                 }
             }
         },
-        "created_at": now,
+        "created_at": created_at if created_at is not None else now,
     }
 
 
@@ -473,6 +474,39 @@ async def test_a_duplicate_delivery_applies_once(
     )
     assert len(rows) == 1, "one row per event id"
     assert rows[0].processed_at is not None
+
+
+async def test_an_older_delivery_cannot_roll_back_a_newer_subscription_state(
+    client: AsyncClient, db: AsyncSession, razorpay: FakeRazorpay, unsigned: None
+) -> None:
+    user = await _sign_in(client, db, "ordered-events@example.com")
+    await client.post(CHECKOUT, json={"plan": "pro", "interval": "monthly"})
+    subscription = await billing_service.get_subscription(db, user)
+    assert subscription is not None
+
+    latest = int(utcnow().timestamp()) + 10
+    active = _subscription_event(user_id=user.id, customer_id=subscription.provider_customer_id)
+    active["created_at"] = latest
+    assert await _post_event(
+        client,
+        active,
+        event_id="evt_newer_active",
+    ) == 200
+    pending = _subscription_event(
+        event="subscription.pending",
+        status="pending",
+        user_id=user.id,
+        customer_id=subscription.provider_customer_id,
+    )
+    pending["created_at"] = latest - 1
+    assert await _post_event(
+        client,
+        pending,
+        event_id="evt_older_pending",
+    ) == 200
+
+    await db.refresh(subscription)
+    assert subscription.status is SubscriptionStatus.ACTIVE
 
 
 async def test_an_unprocessed_event_is_retried_rather_than_skipped(

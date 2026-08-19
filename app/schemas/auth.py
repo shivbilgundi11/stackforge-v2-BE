@@ -17,7 +17,7 @@ class _Base(BaseModel):
 
 class RegisterRequest(_Base):
     email: EmailStr
-    password: str = Field(min_length=12, max_length=256)
+    password: str = Field(min_length=8, max_length=256)
     name: str = Field(min_length=1, max_length=120)
     #: Signup-from-invite (M21). When present, the email must be the invited
     #: address, and the address is verified implicitly — possession of the
@@ -54,12 +54,12 @@ class ForgotPasswordRequest(_Base):
 
 class ResetPasswordRequest(_Base):
     token: str = Field(min_length=16, max_length=256)
-    password: str = Field(min_length=12, max_length=256)
+    password: str = Field(min_length=8, max_length=256)
 
 
 class ChangePasswordRequest(_Base):
     current_password: str = Field(min_length=1, max_length=256)
-    new_password: str = Field(min_length=12, max_length=256)
+    new_password: str = Field(min_length=8, max_length=256)
 
 
 class UpdateProfileRequest(_Base):

@@ -33,6 +33,7 @@ SECRET = "whsec_test_secret_for_signature_verification"
 @pytest.fixture(autouse=True)
 def _configured(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(settings, "razorpay_webhook_secret", SECRET)
+    monkeypatch.setattr(settings, "razorpay_webhook_previous_secret", "")
 
 
 def _sign(body: bytes, *, secret: str = SECRET) -> str:
@@ -94,6 +95,16 @@ def test_a_forged_signature_is_refused() -> None:
 
     with pytest.raises(UpstreamError):
         razorpay_integration.verify_signature(body, _sign(body, secret="whsec_wrong"))
+
+
+def test_a_delivery_signed_before_secret_rotation_is_accepted(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    previous = "whsec_previous_secret"
+    monkeypatch.setattr(settings, "razorpay_webhook_previous_secret", previous)
+    body = json.dumps(_event()).encode()
+
+    assert razorpay_integration.verify_signature(body, _sign(body, secret=previous)) == _event()
 
 
 def test_a_body_changed_after_signing_is_refused() -> None:

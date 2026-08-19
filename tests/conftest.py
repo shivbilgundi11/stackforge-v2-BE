@@ -203,7 +203,7 @@ async def client(db: AsyncSession) -> AsyncIterator[AsyncClient]:
 
 # ── Helpers ─────────────────────────────────────────────────────────────────
 
-GOOD_PASSWORD = "correct-horse-battery-staple-42"
+GOOD_PASSWORD = "Correct-horse-battery-staple-42!"
 
 
 @pytest.fixture

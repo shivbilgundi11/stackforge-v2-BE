@@ -153,6 +153,9 @@ class Subscription(Base, TimestampMixin):
     #: Which plan this subscription is on, so a plan change can be detected by
     #: comparing against configuration rather than by trusting the event order.
     provider_plan_id: Mapped[str | None] = mapped_column(String(80))
+    #: The latest Razorpay event time applied to this row. Webhooks can arrive
+    #: out of order, so an older snapshot must not roll a subscription back.
+    provider_event_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
     plan: Mapped[Plan] = mapped_column(
         Enum(Plan, name="plan", values_callable=lambda e: [m.value for m in e], create_type=False),
