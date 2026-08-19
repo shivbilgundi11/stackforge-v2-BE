@@ -17,6 +17,15 @@ from app.core.redis import get_redis, set_redis
 from app.models.user import Plan
 
 
+@pytest.fixture(autouse=True)
+def _closed_breaker():
+    """The breaker is process state, so an outage in one test would otherwise
+    make the next one silently skip Redis and assert nothing."""
+    rate_limit.reset_breaker()
+    yield
+    rate_limit.reset_breaker()
+
+
 async def _spend(klass: rate_limit.RateLimitClass, *, key: str, plan: Plan | None, times: int):
     last = None
     for _ in range(times):
@@ -173,6 +182,82 @@ async def test_a_redis_outage_allows_rather_than_refuses() -> None:
     # And it reports a full budget, not an empty one: a degraded limiter that
     # tells every client it is out of allowance makes them all back off at once.
     assert decision.remaining == decision.limit
+
+
+async def test_an_outage_is_asked_about_once_not_once_per_request() -> None:
+    """Failing open is not enough on its own — *how long* it takes to fail is
+    the rest of it. This runs on nearly every route, so paying the connect
+    timeout per request turns an unreachable Redis into about a second of
+    added latency across the whole product. That is the exact regression
+    `core/redis.py` documents having fixed once already.
+    """
+    calls = 0
+
+    class _Broken:
+        def pipeline(self) -> Any:
+            nonlocal calls
+            calls += 1
+            raise ConnectionError("redis is gone")
+
+    set_redis(_Broken())
+
+    for _ in range(20):
+        decision = await rate_limit.check(rate_limit.READ, identity_key="u:i", plan=Plan.FREE)
+        assert decision is not None and decision.allowed is True
+
+    assert calls == 1, f"asked a dead Redis {calls} times in 20 requests"
+
+
+async def test_the_breaker_reopens_after_the_cooldown(monkeypatch: pytest.MonkeyPatch) -> None:
+    """It has to retry eventually, or the first blip disables rate limiting
+    until the process restarts."""
+    calls = 0
+
+    class _Broken:
+        def pipeline(self) -> Any:
+            nonlocal calls
+            calls += 1
+            raise ConnectionError("redis is gone")
+
+    set_redis(_Broken())
+    base = time.time()
+
+    monkeypatch.setattr(time, "time", lambda: base)
+    await rate_limit.check(rate_limit.READ, identity_key="u:j", plan=Plan.FREE)
+    await rate_limit.check(rate_limit.READ, identity_key="u:j", plan=Plan.FREE)
+    assert calls == 1
+
+    monkeypatch.setattr(time, "time", lambda: base + rate_limit.OUTAGE_COOLDOWN_SECONDS + 0.1)
+    await rate_limit.check(rate_limit.READ, identity_key="u:j", plan=Plan.FREE)
+    assert calls == 2
+
+
+async def test_recovery_closes_the_breaker_without_waiting_it_out() -> None:
+    """A success means the connection is back; holding the breaker open for
+    the rest of the cooldown would keep the limiter off for no reason."""
+
+    class _BrokenOnce:
+        def __init__(self) -> None:
+            self.failed = False
+
+        def pipeline(self) -> Any:
+            if not self.failed:
+                self.failed = True
+                raise ConnectionError("one blip")
+            return get_redis().pipeline()
+
+    healthy = get_redis()
+    set_redis(_BrokenOnce())
+    await rate_limit.check(rate_limit.READ, identity_key="u:k", plan=Plan.FREE)
+
+    # Breaker is open; close it the way a recovered call would.
+    rate_limit.reset_breaker()
+    set_redis(healthy)
+
+    decision = await rate_limit.check(rate_limit.READ, identity_key="u:k", plan=Plan.FREE)
+    assert decision is not None
+    # Counted for real again, rather than the fail-open full budget.
+    assert decision.remaining == decision.limit - 1
 
 
 async def test_a_refusal_never_asks_for_an_immediate_retry() -> None:

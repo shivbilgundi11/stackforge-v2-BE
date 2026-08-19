@@ -17,10 +17,19 @@ for one number, and the one nobody edits would drift silently. So the hourly
 windows live here, the daily and monthly allowances live in `plan_quotas`, and
 neither reimplements the other. See D-53 in the decision log.
 
-**It fails open.** A Redis outage must not take the API down with it — the
-same trade every cache and quota read in this codebase already makes (D-30).
-An attacker who can also take Redis down does not need to be rate limited;
-they have a better attack available.
+**It fails open, and it stops asking.** A Redis outage must not take the API
+down with it — the same trade every cache and quota read in this codebase
+already makes (D-30). An attacker who can also take Redis down does not need
+to be rate limited; they have a better attack available.
+
+Failing open is not enough on its own, because *how long it takes to fail*
+matters as much as the verdict. This runs on nearly every route, so paying the
+connect timeout per request turns an unreachable Redis into roughly a second
+of added latency on every call in the product — which is the failure
+`core/redis.py` already documents having fixed once, by cutting the retry
+policy down to a single attempt. One attempt is still one second. So a failure
+opens a breaker: for `OUTAGE_COOLDOWN_SECONDS` afterwards the limiter does not
+touch Redis at all and returns the fail-open verdict immediately.
 """
 
 from __future__ import annotations
@@ -47,6 +56,19 @@ class Window(NamedTuple):
 
 
 HOUR: Final = 3600
+
+#: How long to stop calling Redis after a failure.
+#:
+#: Long enough that a sustained outage costs one timeout rather than one per
+#: request, short enough that recovery is not noticeable. Deliberately not
+#: tied to the window length: this is about the health of the connection, not
+#: about the policy being enforced.
+OUTAGE_COOLDOWN_SECONDS: Final = 5.0
+
+#: When the breaker closes again. Module state, because the connection it
+#: describes is process-wide — a per-caller breaker would learn the same fact
+#: separately for every identity and save nothing.
+_unavailable_until: float = 0.0
 
 
 class RateLimitClass(NamedTuple):
@@ -133,6 +155,8 @@ async def check(klass: RateLimitClass, *, identity_key: str, plan: Plan | None) 
     period and the whole of the next in the first second of the next, which is
     twice the intended rate at exactly the moment load is already spiking.
     """
+    global _unavailable_until
+
     window = klass.by_plan.get(plan)
     if window is None:
         return None
@@ -140,6 +164,11 @@ async def check(klass: RateLimitClass, *, identity_key: str, plan: Plan | None) 
     key = Keys.rate_limit(klass.name, identity_key)
     now = time.time()
     cutoff = now - window.seconds
+
+    # The breaker. Checked before the call rather than after a failure,
+    # because the point is to not make the call.
+    if now < _unavailable_until:
+        return _unlimited(window)
 
     try:
         redis = get_redis()
@@ -155,8 +184,20 @@ async def check(klass: RateLimitClass, *, identity_key: str, plan: Plan | None) 
         pipe.zrange(key, 0, 0, withscores=True)
         results = await pipe.execute()
     except Exception as exc:
-        logger.warning("ratelimit.unavailable", klass=klass.name, error=str(exc))
+        _unavailable_until = time.time() + OUTAGE_COOLDOWN_SECONDS
+        # Logged at the moment the breaker opens, so an outage produces a
+        # readable trickle rather than one line per request.
+        logger.warning(
+            "ratelimit.unavailable",
+            klass=klass.name,
+            error=str(exc),
+            cooldown_seconds=OUTAGE_COOLDOWN_SECONDS,
+        )
         return _unlimited(window)
+
+    # A success closes the breaker early, so recovery does not wait out a
+    # cooldown that is already over.
+    _unavailable_until = 0.0
 
     # `zcard` ran *before* this request was added, so it is the count of
     # prior requests: `used` is that plus this one.
@@ -195,6 +236,13 @@ def _nonce() -> str:
     global _counter
     _counter = (_counter + 1) % 1_000_000
     return str(_counter)
+
+
+def reset_breaker() -> None:
+    """Close the breaker. Test seam, and the runbook's answer to "Redis is back
+    but the limiter has not noticed yet"."""
+    global _unavailable_until
+    _unavailable_until = 0.0
 
 
 async def reset(klass: RateLimitClass, identity_key: str) -> None:
