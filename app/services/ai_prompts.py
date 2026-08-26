@@ -37,7 +37,7 @@ Effort = Literal["low", "medium", "high"]
 #: the registry rather than one per prompt: the interesting question is "which
 #: build produced this output", and a per-prompt version answers a question
 #: nobody asks while making the comparison harder.
-PROMPT_VERSION: Final = "v1"
+PROMPT_VERSION: Final = "v3"
 
 # Models, by what the call is for. Named here rather than at the call site so
 # a re-tier is one edit — and so nothing in a route can pick a model.
@@ -55,7 +55,7 @@ MEDIUM: Final = "openai/gpt-oss-120b"
 #: Short single-paragraph rationales, where the smaller model is
 #: indistinguishable and roughly twice as fast.
 SMALL: Final = "openai/gpt-oss-20b"
-GEMINI: Final = "gemini-2.5-flash"
+GEMINI: Final = "gemini-3.6-flash"
 
 
 #: The tokens-per-minute allowance of the smallest tier this runs on.

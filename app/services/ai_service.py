@@ -133,7 +133,7 @@ async def generate_gemini_json(
         "generationConfig": {
             "maxOutputTokens": prompt.max_tokens,
             "responseMimeType": "application/json",
-            "responseSchema": prompt.schema,
+            "responseJsonSchema": prompt.schema,
         },
     }
     try:

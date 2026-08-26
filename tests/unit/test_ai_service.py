@@ -151,7 +151,10 @@ async def test_gemini_stack_synthesis_uses_structured_output(
     sent = client.calls[0]
     assert sent["headers"] == {"x-goog-api-key": "gemini-test"}
     assert sent["json"]["generationConfig"]["responseMimeType"] == "application/json"
-    assert sent["json"]["generationConfig"]["responseSchema"] == ai_prompts.STACK_SYNTHESIS.schema
+    assert (
+        sent["json"]["generationConfig"]["responseJsonSchema"]
+        == ai_prompts.STACK_SYNTHESIS.schema
+    )
 
 
 # ── the None contract ────────────────────────────────────────────────────────
