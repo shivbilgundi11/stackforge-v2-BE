@@ -6,22 +6,98 @@ Four comparisons, one output contract, one renderer. Every one accepts a
 
 from __future__ import annotations
 
+from collections.abc import Awaitable, Callable
 from decimal import Decimal
 from typing import Any
 
 from fastapi import APIRouter
 from pydantic import BaseModel, Field
 
-from app.api.deps import Db, RunIdentity
+from app.api.deps import Db, Identity, RunIdentity
 from app.core.errors import NotFound, ValidationFailed
 from app.core.responses import Envelope, ok
 from app.data.compare_criteria import PRIORITIES, STACK_ARCHETYPES, Priority
-from app.schemas.tools import ToolRunOut
-from app.services import catalog_service, compare_service, tool_service
+from app.schemas.tools import ToolOutput, ToolRunOut
+from app.services import ai_service, catalog_service, compare_service, tool_service
 
 router = APIRouter(tags=["compare"])
 
 WORKFLOW = "compare"
+
+
+# ── synthesis ────────────────────────────────────────────────────────────────
+#
+# One enrichment for all four comparisons, because all four already produce
+# the same shape: weighted criteria, a ranked table, a winner, and a rationale
+# block. The prompt is written against that shape rather than against models
+# or vector databases, so a fifth comparison inherits the commentary by
+# calling `_rationale` too.
+
+
+def _rationale(
+    db: Db, identity: Identity, *, tool_slug: str, payload: BaseModel
+) -> Callable[[ToolOutput], Awaitable[Any]]:
+    return ai_service.enrichment(
+        db,
+        purpose="comparison_rationale",
+        identity=identity,
+        tool_slug=tool_slug,
+        variables=payload.model_dump(mode="json"),
+        apply=_apply_rationale,
+        grounding=_rationale_grounding,
+    )
+
+
+def _rationale_grounding(output: ToolOutput) -> dict[str, Any]:
+    """The ranking and the criteria behind it — not the full matrix.
+
+    Every criterion carries a per-option cell with a score and a raw value,
+    which is most of the response by size and is the part the model is least
+    able to say anything new about. What decides the question is which
+    criteria were weighted heavily and how the options ranked against them, so
+    that is what gets the input budget.
+    """
+    return {
+        "metrics": {key: str(value) for key, value in output.metrics.items()},
+        "criteria": [
+            {"label": row.get("label"), "weight": row.get("weight")}
+            for row in output.tables.get("matrix", [])
+        ],
+        "options": output.tables.get("options", []),
+        # Named for what the model is meant to do with it. Labelled
+        # `rule_rationale` it read as source material and came back
+        # paraphrased; labelled as already said, it adds instead of echoing.
+        "already_said_do_not_repeat": [
+            row.get("text") for row in output.tables.get("rationale", [])
+        ],
+    }
+
+
+def _apply_rationale(output: ToolOutput, data: dict[str, Any]) -> None:
+    """Rewrite the verdict, keep the arithmetic.
+
+    The `why` row is replaced rather than appended to: two paragraphs
+    answering the same question, one of them a template, reads as a page that
+    could not decide. `switch_when` is added to the engine's rather than
+    replacing it — the engine's version names a threshold, the model's names a
+    situation, and they are not the same advice.
+    """
+    rows = list(output.tables.get("rationale", []))
+    if why := str(data.get("why") or "").strip():
+        rows = [row for row in rows if row.get("kind") != "why"]
+        rows.insert(0, {"kind": "why", "text": why})
+    if switch_when := str(data.get("switch_when") or "").strip():
+        # Dropped when it is the engine's own line in different words. The
+        # model is shown the rule rationale to keep it honest, and being shown
+        # it is exactly what makes paraphrasing tempting.
+        echo = any(
+            ai_service.echoes(switch_when, str(row.get("text", "")))
+            for row in rows
+            if row.get("kind") == "switch_when"
+        )
+        if not echo:
+            rows.append({"kind": "switch_when", "text": switch_when})
+    output.tables["rationale"] = rows
 
 
 class CompareModelsIn(BaseModel):
@@ -84,6 +160,7 @@ async def run_compare_models(
             cached_input_ratio=payload.cached_input_ratio,
             priority=payload.priority,
         ),
+        enrich=_rationale(db, identity, tool_slug="compare-models", payload=payload),
     )
     return ok(result)
 
@@ -114,6 +191,7 @@ async def run_compare_vector_db(
             dimensions=payload.dimensions,
             priority=payload.priority,
         ),
+        enrich=_rationale(db, identity, tool_slug="compare-vector-db", payload=payload),
     )
     return ok(result)
 
@@ -139,6 +217,7 @@ async def run_compare_stacks(
             blended_hourly_rate=payload.blended_hourly_rate,
             priority=payload.priority,
         ),
+        enrich=_rationale(db, identity, tool_slug="compare-stacks", payload=payload),
     )
     return ok(result)
 
@@ -162,6 +241,7 @@ async def run_compare_build_vs_buy(
             vendor_integration_hours=payload.vendor_integration_hours,
             priority=payload.priority,
         ),
+        enrich=_rationale(db, identity, tool_slug="compare-build-vs-buy", payload=payload),
     )
     return ok(result)
 

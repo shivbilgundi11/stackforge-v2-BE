@@ -29,7 +29,7 @@ import csv
 import io
 import json
 import zipfile
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import timedelta
 from typing import Any, Final, cast
 
@@ -48,9 +48,9 @@ from app.models.export import Export, ExportFormat, ExportStatus, SourceType
 from app.models.user import Plan
 from app.schemas.tools import Artifact
 from app.services import artifacts, pdf_service
+from app.services.artifacts import architecture, result_document
 from app.services.artifacts import markdown as md
-from app.services.artifacts import result_document
-from app.services.artifacts.sources import RunSource, Source, StackSource
+from app.services.artifacts.sources import Narrative, RunSource, Source, StackSource
 
 logger = get_logger("exports")
 
@@ -507,6 +507,109 @@ def predicted_bytes(source: Source, export_format: ExportFormat) -> int:
 
 def should_queue(source: Source, export_format: ExportFormat) -> bool:
     return predicted_bytes(source, export_format) > settings.export_async_threshold_bytes
+
+
+# ── written commentary ───────────────────────────────────────────────────────
+
+#: The export shapes that actually contain an architecture document. Anything
+#: else — a CSV of one table, a JSON envelope, the cost report on its own — has
+#: nowhere to put written sections, and paying for a model call whose output is
+#: then discarded is the kind of cost that only shows up on the bill.
+_NARRATED_ARTIFACT: Final = architecture.TYPE_DOCUMENT
+
+
+def wants_narrative(
+    source: Source, *, artifact_type: str | None, export_format: ExportFormat
+) -> bool:
+    if not isinstance(source, StackSource):
+        return False
+    if export_format is ExportFormat.ZIP:
+        # The bundle contains architecture.md whatever else was asked for.
+        return True
+    if export_format not in {ExportFormat.MARKDOWN, ExportFormat.PDF}:
+        return False
+    return artifact_type == _NARRATED_ARTIFACT
+
+
+async def narrated(
+    db: AsyncSession,
+    identity: Identity,
+    source: Source,
+    *,
+    artifact_type: str | None,
+    export_format: ExportFormat,
+) -> Source:
+    """Attach written sections to a stack, when this export will show them.
+
+    The one AI call in the export path, and it is deliberately *here* rather
+    than inside the generator. Generators are pure — same source, same bytes —
+    which is what makes FR-11 a unit test; a generator that reached for a
+    session would end that, and the first flaky export would be blamed on
+    caching for a week.
+
+    Failure is silence. `generate_json` returns `None` for everything from a
+    missing key to a refusal, and a document without written sections is the
+    document this product shipped for its whole life before now — complete,
+    every figure the engine's own. Failing an export the user has already paid
+    a plan for, to protect prose, would be the wrong trade (D-06).
+    """
+    if not wants_narrative(source, artifact_type=artifact_type, export_format=export_format):
+        return source
+
+    from app.services import ai_service
+
+    stack = cast(StackSource, source)
+    result = await ai_service.generate_json(
+        db,
+        purpose="architecture_document",
+        grounding={
+            "stack": stack.title,
+            "requirements": _requirement_facts(stack),
+            "components": [
+                {"name": tool.name, "category": tool.category, "status": tool.status}
+                for tool in stack.components
+            ],
+            "score": stack.score.breakdown(),
+            "compatibility": (
+                [
+                    {"pair": f"{pair.tool_a} + {pair.tool_b}", "score": pair.score}
+                    for pair in stack.compatibility.pairs
+                ]
+                if stack.compatibility
+                else []
+            ),
+        },
+        variables={"title": stack.title, "description": stack.description or ""},
+        identity=identity,
+        tool_slug=None,
+    )
+    if result is None:
+        return source
+
+    data = result.data
+    narrative = Narrative(
+        overview=str(data.get("overview") or "").strip(),
+        decisions=str(data.get("decisions") or "").strip(),
+        operations=str(data.get("operations") or "").strip(),
+    )
+    if not any((narrative.overview, narrative.decisions, narrative.operations)):
+        return source
+
+    logger.info("exports.narrated", stack_id=stack.id, model=result.meta.model)
+    return replace(stack, narrative=narrative)
+
+
+def _requirement_facts(source: StackSource) -> dict[str, Any]:
+    requirements = source.requirements
+    return {
+        "use_case": requirements.use_case,
+        "scale_target": requirements.scale_target,
+        "monthly_budget": requirements.monthly_budget,
+        "team_skill": requirements.team_skill,
+        "latency_ms": requirements.latency_ms,
+        "sensitivity": requirements.sensitivity,
+        "deployment": requirements.deployment,
+    }
 
 
 # ── the lifecycle ────────────────────────────────────────────────────────────

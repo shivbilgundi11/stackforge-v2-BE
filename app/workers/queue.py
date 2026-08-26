@@ -108,6 +108,17 @@ async def build_export(_context: dict[str, Any], export_id: str) -> str:
                 source_id=export.source_id,
                 identity=identity,
             )
+            # The queued path re-resolves the source, so it re-narrates too.
+            # A bundle that got its written sections when it rendered inline
+            # and lost them when it was large enough to queue would be a
+            # difference in the product decided by file size.
+            source = await export_service.narrated(
+                session,
+                identity,
+                source,
+                artifact_type=export.artifact_type,
+                export_format=export.format,
+            )
             rendered = export_service.render(
                 source,
                 artifact_type=export.artifact_type,

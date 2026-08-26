@@ -1,4 +1,4 @@
-"""The only Groq client in the process.
+"""The only model client in the process.
 
 Routes never call the API. They call a domain service, which calls this. One
 client means one place that knows the request-shape rules, one place that
@@ -14,23 +14,31 @@ That property is the module (D-06). The rule engine has already produced a
 complete, returnable answer before this is called; AI is a layer over it and
 never a gate in front of it.
 
-The provider is Groq, whose API is OpenAI-shaped: one `chat.completions`
-call, the system prompt as the first message, `response_format` carrying the
-schema, and `reasoning_effort` as the depth knob. Three consequences are worth
-stating rather than discovering:
+The provider is **Gemini**, everywhere. It was Groq for everything except the
+Architect, and running two providers meant two request shapes, two failure
+taxonomies, and two sets of quota arithmetic to reason about before answering
+"why did this come back rule_based". One provider is the point.
 
-* **Reasoning tokens are billed as output.** Groq reports them inside
-  `completion_tokens`, so `effort` is a direct lever on spend and every prompt
-  in the registry sits at `low` or `medium` for that reason.
-* **The prompt cache is automatic.** There is no `cache_control` marker to
-  send and no way to ask for one; the provider reuses a recent shared prefix
-  or it does not. That is why the stable-first message order below is the only
-  thing this module does about caching — and why a run reporting zero cached
-  tokens is a miss, not a bug.
-* **`prompt_tokens` includes the cached part**, unlike the provider this
-  module was originally written against. It is split back out in `_usage_of`,
-  because `input_tokens` meaning "the uncached remainder" is what stops a
-  working cache from reading as *more* expensive in the ledger.
+Four consequences of this API are worth stating rather than discovering:
+
+* **Thinking tokens are billed as output and are reported separately.**
+  `candidatesTokenCount` excludes them; `thoughtsTokenCount` holds them. They
+  are folded together in `_gemini_usage`, because a ledger that reports only
+  the visible half of what it paid for is understating cost by more than the
+  visible half on a short answer.
+* **They also come out of `maxOutputTokens`.** A reservation that thinking
+  exhausts returns a 200 with `finishReason: MAX_TOKENS` and *no parts at
+  all* — not a truncated answer, an empty one. That is why the reservations
+  in `ai_prompts` are sized against the thinking budget rather than against
+  the length of the prose.
+* **`thinkingLevel` is the depth knob**, and it is the direct lever on both
+  latency and spend. Every prompt in the registry sits at `low` or `medium`
+  for that reason.
+* **The free tier is metered in requests per day, per model** — 20 of them,
+  not 20 per minute. That is why `ai_prompts` tiers across two models rather
+  than pointing every prompt at one: the allowances are separate, so tiering
+  is the difference between a product that works all day and one that stops
+  after the twentieth request.
 """
 
 from __future__ import annotations
@@ -41,15 +49,7 @@ from collections.abc import Awaitable, Callable
 from decimal import Decimal
 from typing import Any, Final, NamedTuple
 
-import groq
 import httpx
-from groq import AsyncGroq
-from groq.types.chat import (
-    ChatCompletionMessageParam,
-    ChatCompletionSystemMessageParam,
-    ChatCompletionUserMessageParam,
-)
-from groq.types.chat.completion_create_params import ResponseFormatResponseFormatJsonSchema
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import Identity
@@ -70,33 +70,17 @@ GEMINI_GENERATE_CONTENT_URL: Final = (
     "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
 )
 
-#: `finish_reason` values that mean the model declined rather than answered.
+#: `finishReason` values that mean the model declined rather than answered.
 #: A declined request is a 200 with no usable content, so it has to be named
 #: here or it arrives as "malformed output" and gets debugged as a bad schema.
-_REFUSAL_REASONS: Final = frozenset({"content_filter", "refusal"})
+_REFUSAL_REASONS: Final = frozenset(
+    {"SAFETY", "PROHIBITED_CONTENT", "BLOCKLIST", "SPII", "IMAGE_SAFETY", "RECITATION"}
+)
 
-_client: AsyncGroq | None = None
-
-
-def get_client() -> AsyncGroq | None:
-    """The process-wide client, or `None` when no key is configured.
-
-    Built lazily so importing this module never needs a key — which is what
-    lets the whole test suite run, and the app boot, with `GROQ_API_KEY`
-    unset.
-    """
-    global _client
-    if not settings.ai_enabled:
-        return None
-    if _client is None:
-        _client = AsyncGroq(api_key=settings.groq_api_key, timeout=TIMEOUT_SECONDS)
-    return _client
-
-
-def set_client(client: AsyncGroq | None) -> None:
-    """Test seam. Nothing in the app calls this."""
-    global _client
-    _client = client
+#: The one that is neither a refusal nor a bad schema: the reservation ran out.
+#: On this provider that is a 200 carrying an empty `parts` list, which reads
+#: as malformed output unless it is named.
+_TRUNCATED: Final = "MAX_TOKENS"
 
 
 class AiResult(NamedTuple):
@@ -104,7 +88,7 @@ class AiResult(NamedTuple):
     meta: AiMeta
 
 
-async def generate_gemini_json(
+async def generate_json(
     db: AsyncSession,
     *,
     purpose: str,
@@ -113,13 +97,29 @@ async def generate_gemini_json(
     identity: Identity,
     tool_slug: str | None = None,
 ) -> AiResult | None:
-    """Call Gemini's Generate Content API and return structured output."""
+    """Run one synthesis call. `None` on any failure whatsoever.
+
+    The schema comes from the registry, never from the caller, and the
+    response is requested as structured output rather than asked for in prose
+    and parsed. Parsing prose JSON fails a few percent of the time, and each
+    failure would silently degrade to `rule_based` with no signal separating
+    "the prompt is wrong" from "the model was down".
+
+    The stable half of the prompt goes in `systemInstruction`, byte-identical
+    per purpose, and the rule-engine output that varies per request goes in
+    the user turn after it. That order is the only lever there is on implicit
+    context caching, which is automatic here — there is no marker to send and
+    no way to ask for one.
+    """
     prompt = ai_prompts.REGISTRY.get(purpose)
-    if prompt is None:  # pragma: no cover
+    if prompt is None:  # pragma: no cover — a programming error, not an input
+        logger.error("ai.unknown_purpose", purpose=purpose)
         return None
-    if not settings.gemini_enabled:
+
+    if not settings.ai_enabled:
         await _record(db, prompt, identity, tool_slug, AiOutcome.DISABLED, latency_ms=0)
         return None
+
     if _exhausted(await quota_remaining(db, identity)):
         await _record(db, prompt, identity, tool_slug, AiOutcome.QUOTA_EXCEEDED, latency_ms=0)
         return None
@@ -134,6 +134,9 @@ async def generate_gemini_json(
             "maxOutputTokens": prompt.max_tokens,
             "responseMimeType": "application/json",
             "responseJsonSchema": prompt.schema,
+            # Thinking is billed as output and comes out of the reservation
+            # above, so this is a spend lever and a truncation risk at once.
+            "thinkingConfig": {"thinkingLevel": prompt.effort},
         },
     }
     try:
@@ -149,15 +152,43 @@ async def generate_gemini_json(
         await _fail(db, prompt, identity, tool_slug, AiOutcome.TIMEOUT, started, exc)
         return None
     except httpx.HTTPStatusError as exc:
+        # 429 is the daily request allowance on the free tier, and it is the
+        # one failure an operator can act on. Filed under `api_error` it would
+        # send that investigation to the wrong place entirely.
         outcome = AiOutcome.RATE_LIMITED if exc.response.status_code == 429 else AiOutcome.API_ERROR
         await _fail(db, prompt, identity, tool_slug, outcome, started, exc)
         return None
     except (httpx.HTTPError, ValueError) as exc:
         await _fail(db, prompt, identity, tool_slug, AiOutcome.API_ERROR, started, exc)
         return None
+    except Exception as exc:
+        # Deliberately last and deliberately broad. The contract is that
+        # nothing from a model call escapes this function, and a contract that
+        # only covers the exceptions we thought of is not one.
+        await _fail(db, prompt, identity, tool_slug, AiOutcome.API_ERROR, started, exc)
+        return None
 
     latency_ms = int((time.perf_counter() - started) * 1000)
     usage = _gemini_usage(body)
+    finish_reason = _finish_reason(body)
+
+    # A safety classifier can decline and still return a 200 with no content.
+    # Reading the parts without checking would report the refusal as a schema
+    # failure, which is the wrong thing to go and debug.
+    if finish_reason in _REFUSAL_REASONS:
+        await _record(
+            db,
+            prompt,
+            identity,
+            tool_slug,
+            AiOutcome.REFUSAL,
+            latency_ms=latency_ms,
+            usage=usage,
+            detail=f"refusal:{finish_reason}",
+        )
+        await _consume_quota(db, identity)
+        return None
+
     data = _gemini_json(body)
     if data is None:
         await _record(
@@ -168,6 +199,10 @@ async def generate_gemini_json(
             AiOutcome.INVALID_OUTPUT,
             latency_ms=latency_ms,
             usage=usage,
+            # `MAX_TOKENS` here means thinking ate the reservation and the
+            # answer never started. Recording the reason is the difference
+            # between raising `max_tokens` and rewriting a schema.
+            detail=f"finish_reason={finish_reason}",
         )
         await _consume_quota(db, identity)
         return None
@@ -184,6 +219,16 @@ async def generate_gemini_json(
         cost=cost,
     )
     await _consume_quota(db, identity)
+
+    logger.info(
+        "ai.call",
+        purpose=purpose,
+        model=prompt.model,
+        latency_ms=latency_ms,
+        cached_read=usage["cached_read_tokens"],
+        cost_usd=str(cost),
+    )
+
     return AiResult(
         data=data,
         meta=AiMeta(
@@ -234,197 +279,6 @@ async def _consume_quota(db: AsyncSession, identity: Identity) -> None:
     from app.services import feature_service
 
     await feature_service.record(db, identity, Metric.AI_CALLS_PER_DAY)
-
-
-def _response_format(prompt: ai_prompts.Prompt) -> ResponseFormatResponseFormatJsonSchema:
-    """The schema, in the shape the provider enforces it.
-
-    `strict` is the whole point. Without it the schema is a suggestion the
-    model usually follows, and "usually" means a few percent of requests
-    degrade to `rule_based` with nothing separating "the prompt is wrong" from
-    "the model was down".
-    """
-    return {
-        "type": "json_schema",
-        "json_schema": {
-            "name": prompt.purpose,
-            "strict": True,
-            "schema": prompt.schema,
-        },
-    }
-
-
-def _is_throttled(exc: groq.APIStatusError) -> bool:
-    """Whether a non-429 status is really a rate limit.
-
-    Exceeding the per-minute **token** allowance returns `413 Request too
-    large` with `code: rate_limit_exceeded` in the body — a payload-size
-    status for a throughput problem. The SDK maps 413 to a plain status error,
-    so without this the one failure an operator can actually act on (the
-    prompt is too big for the tier) is recorded identically to the provider
-    being down.
-
-    The body code is what is trusted; the status is only a cheap prefilter, so
-    a future status carrying the same code is classified correctly too.
-    """
-    if exc.status_code == 429:
-        return True
-    body: object = exc.body
-    if not isinstance(body, dict):
-        return False
-    error: object = body.get("error")
-    if not isinstance(error, dict):
-        return False
-    return str(error.get("code") or "") == "rate_limit_exceeded"
-
-
-async def generate_json(
-    db: AsyncSession,
-    *,
-    purpose: str,
-    grounding: dict[str, Any],
-    variables: dict[str, Any],
-    identity: Identity,
-    tool_slug: str | None = None,
-) -> AiResult | None:
-    """Run one synthesis call. `None` on any failure whatsoever.
-
-    The schema comes from the registry, never from the caller, and the response
-    is requested as structured output rather than asked for in prose and
-    parsed. Parsing prose JSON fails a few percent of the time, and each
-    failure would silently degrade to `rule_based` with no signal separating
-    "the prompt is wrong" from "the model was down".
-    """
-    prompt = ai_prompts.REGISTRY.get(purpose)
-    if prompt is None:  # pragma: no cover — a programming error, not an input
-        logger.error("ai.unknown_purpose", purpose=purpose)
-        return None
-
-    client = get_client()
-    if client is None:
-        await _record(db, prompt, identity, tool_slug, AiOutcome.DISABLED, latency_ms=0)
-        return None
-
-    if _exhausted(await quota_remaining(db, identity)):
-        await _record(db, prompt, identity, tool_slug, AiOutcome.QUOTA_EXCEEDED, latency_ms=0)
-        return None
-
-    # The stable half of the prompt first, byte-identical per purpose; the
-    # rule-engine output that varies per request second. That order is the
-    # only lever there is on the automatic prefix cache — reversing it would
-    # give consecutive requests no shared prefix at all. No assistant prefill:
-    # the last turn must be the user's.
-    system: ChatCompletionSystemMessageParam = {"role": "system", "content": prompt.system}
-    user: ChatCompletionUserMessageParam = {
-        "role": "user",
-        "content": ai_prompts.user_turn(grounding, variables),
-    }
-    messages: list[ChatCompletionMessageParam] = [system, user]
-
-    started = time.perf_counter()
-    try:
-        response = await client.chat.completions.create(
-            model=prompt.model,
-            # `max_completion_tokens`, not `max_tokens`: the latter is
-            # deprecated on this API and does not bound reasoning tokens,
-            # which is the half of the output that actually runs away.
-            max_completion_tokens=prompt.max_tokens,
-            reasoning_effort=prompt.effort,
-            response_format=_response_format(prompt),
-            messages=messages,
-        )
-    except groq.APITimeoutError as exc:
-        await _fail(db, prompt, identity, tool_slug, AiOutcome.TIMEOUT, started, exc)
-        return None
-    except groq.RateLimitError as exc:
-        await _fail(db, prompt, identity, tool_slug, AiOutcome.RATE_LIMITED, started, exc)
-        return None
-    except groq.APIStatusError as exc:
-        # Not all throttling arrives as a 429 (see `_is_throttled`), and the
-        # ledger exists to answer "why does this not work" — a rate limit
-        # filed under `api_error` sends that investigation to the wrong place.
-        outcome = AiOutcome.RATE_LIMITED if _is_throttled(exc) else AiOutcome.API_ERROR
-        await _fail(db, prompt, identity, tool_slug, outcome, started, exc)
-        return None
-    except groq.APIError as exc:
-        await _fail(db, prompt, identity, tool_slug, AiOutcome.API_ERROR, started, exc)
-        return None
-    except Exception as exc:
-        # Deliberately last and deliberately broad. The contract is that
-        # nothing from a model call escapes this function, and a contract that
-        # only covers the exceptions we thought of is not one.
-        await _fail(db, prompt, identity, tool_slug, AiOutcome.API_ERROR, started, exc)
-        return None
-
-    latency_ms = int((time.perf_counter() - started) * 1000)
-    usage = _usage_of(response)
-    finish_reason = _finish_reason(response)
-
-    # Safety classifiers can decline a request and still return a 200. Reading
-    # `choices[0].message.content` without checking would raise on an empty
-    # list, which is the one failure mode that would escape this function.
-    if finish_reason in _REFUSAL_REASONS:
-        await _record(
-            db,
-            prompt,
-            identity,
-            tool_slug,
-            AiOutcome.REFUSAL,
-            latency_ms=latency_ms,
-            usage=usage,
-            detail=f"refusal:{finish_reason}",
-        )
-        await _consume_quota(db, identity)
-        return None
-
-    data = _first_json(response)
-    if data is None:
-        await _record(
-            db,
-            prompt,
-            identity,
-            tool_slug,
-            AiOutcome.INVALID_OUTPUT,
-            latency_ms=latency_ms,
-            usage=usage,
-            detail=f"finish_reason={finish_reason}",
-        )
-        await _consume_quota(db, identity)
-        return None
-
-    cost = ai_pricing.cost_of(model=prompt.model, **usage)
-    await _record(
-        db,
-        prompt,
-        identity,
-        tool_slug,
-        AiOutcome.SUCCESS,
-        latency_ms=latency_ms,
-        usage=usage,
-        cost=cost,
-    )
-    await _consume_quota(db, identity)
-
-    logger.info(
-        "ai.call",
-        purpose=purpose,
-        model=prompt.model,
-        latency_ms=latency_ms,
-        cached_read=usage["cached_read_tokens"],
-        cost_usd=str(cost),
-    )
-
-    return AiResult(
-        data=data,
-        meta=AiMeta(
-            model=prompt.model,
-            prompt_version=ai_prompts.PROMPT_VERSION,
-            input_tokens=usage["input_tokens"],
-            output_tokens=usage["output_tokens"],
-            cost_usd=cost,
-            latency_ms=latency_ms,
-        ),
-    )
 
 
 def enrichment(
@@ -491,6 +345,138 @@ def enrichment(
     return enrich
 
 
+def chain(
+    *enrichers: Callable[[ToolOutput], Awaitable[AiMeta | None]],
+) -> Callable[[ToolOutput], Awaitable[AiMeta | None]]:
+    """Run several enrichments over one result and report them as one.
+
+    `run_tool` takes a single `enrich` and stores a single `AiMeta`, because a
+    run has one source and one cost line. A tool that needs two passes — the
+    Architect wants a grounded assessment *and* a roadmap, and they are two
+    prompts answering two questions — composes them here rather than growing a
+    second AI field on the wire shape.
+
+    **Sequential, deliberately.** The passes share one `AsyncSession`, and
+    concurrent writes on a single session are a race, not a speed-up. They
+    also both draw on one daily request allowance, so nothing is saved by
+    spending it faster.
+
+    A pass that returns `None` is skipped, not fatal: partial enrichment is
+    the normal outcome when an allowance runs out mid-run, and one written
+    section is worth more than none. `None` comes back only when every pass
+    failed, which is what keeps `source` honest — `hybrid` means at least one
+    model actually contributed.
+    """
+
+    async def enrich(output: ToolOutput) -> AiMeta | None:
+        metas = [meta for enricher in enrichers if (meta := await enricher(output)) is not None]
+        if not metas:
+            return None
+        return _merged(metas)
+
+    return enrich
+
+
+def _merged(metas: list[AiMeta]) -> AiMeta:
+    """One usage line from several calls.
+
+    Tokens and cost add up; latency adds up too, because the passes ran one
+    after another and the figure is meant to answer "how long did the AI part
+    of this request take". Models are joined rather than picked: the tiers
+    bill at different rates, so a row naming one of them would hide the other
+    from anyone reconciling the ledger against an invoice.
+    """
+    return AiMeta(
+        model="+".join(dict.fromkeys(meta.model for meta in metas)),
+        prompt_version=ai_prompts.PROMPT_VERSION,
+        input_tokens=sum(meta.input_tokens for meta in metas),
+        output_tokens=sum(meta.output_tokens for meta in metas),
+        cost_usd=sum((meta.cost_usd for meta in metas), Decimal(0)),
+        latency_ms=sum(meta.latency_ms for meta in metas),
+    )
+
+
+#: How much word overlap makes two sentences the same advice. Chosen against
+#: real output: a paraphrase of a grounded line lands above 0.65, and two
+#: genuinely different recommendations about the same component land under
+#: 0.4 even when they share the component's name.
+_ECHO_THRESHOLD: Final = 0.6
+
+#: Words that carry no signal about *what* is being said, so counting them
+#: makes every pair of English sentences look alike.
+_STOPWORDS: Final = frozenset(
+    [
+        "a",
+        "an",
+        "and",
+        "are",
+        "as",
+        "at",
+        "be",
+        "but",
+        "by",
+        "for",
+        "from",
+        "has",
+        "have",
+        "if",
+        "in",
+        "into",
+        "is",
+        "it",
+        "its",
+        "of",
+        "on",
+        "or",
+        "that",
+        "the",
+        "this",
+        "to",
+        "was",
+        "were",
+        "will",
+        "with",
+        "you",
+        "your",
+    ]
+)
+
+
+def echoes(candidate: str, existing: str) -> bool:
+    """Whether the model has restated something it was already shown.
+
+    Grounding a prompt in the rule engine's own words is what keeps the model
+    honest, and it is also an invitation to paraphrase them back. An exact
+    match is easy to drop; the real output is a rewording, and a page showing
+    the same advice twice in slightly different English reads as a bug in the
+    tool rather than as emphasis.
+
+    Overlap coefficient on content words — the intersection over the *smaller*
+    of the two, not over the union. Jaccard was the first attempt and got this
+    wrong in the case it exists for: the engine's rows are long and carry
+    their own arithmetic, the model's restatement is one short sentence, and
+    a short sentence entirely contained in a long one still scores under 0.2
+    on Jaccard. Asking "is the shorter one already inside the longer one" is
+    the actual question.
+
+    Deliberately crude beyond that. The failure that matters is a near-copy,
+    which scores far above anything genuinely new, so a cleverer measure would
+    buy precision the decision does not use.
+    """
+
+    def words(text: str) -> set[str]:
+        return {
+            word
+            for word in "".join(c.lower() if c.isalnum() else " " for c in text).split()
+            if word not in _STOPWORDS and len(word) > 2
+        }
+
+    left, right = words(candidate), words(existing)
+    if not left or not right:
+        return False
+    return len(left & right) / min(len(left), len(right)) >= _ECHO_THRESHOLD
+
+
 def _default_grounding(output: ToolOutput) -> dict[str, Any]:
     """The deterministic result, as the model sees it.
 
@@ -508,20 +494,64 @@ def _default_grounding(output: ToolOutput) -> dict[str, Any]:
 
 
 def _gemini_usage(body: dict[str, Any]) -> dict[str, int]:
+    """Token counts, in this module's own vocabulary.
+
+    `candidatesTokenCount` is the visible answer only. Thinking is reported
+    separately as `thoughtsTokenCount` and is billed at the **output** rate,
+    so the two are added: a ledger that counted only the visible half would
+    understate a short structured answer by more than it counted, because
+    reasoning routinely runs several times the length of the JSON it produces.
+
+    `promptTokenCount` includes the implicitly cached part, so the cached
+    count is subtracted back out — downstream, `input_tokens` means the
+    uncached remainder billed at the full rate, and folding the two together
+    would make a working cache read as *more* expensive rather than less. The
+    subtraction is clamped, because a provider figure that exceeds the total
+    it is part of should degrade to zero rather than bill a negative.
+
+    `cached_write_tokens` is always zero. Context caching here is implicit and
+    carries no surcharge for populating it, so there is nothing to charge.
+    """
     usage = body.get("usageMetadata")
     if not isinstance(usage, dict):
         usage = {}
-    prompt_tokens = int(usage.get("promptTokenCount") or 0)
-    cached = min(int(usage.get("cachedContentTokenCount") or 0), prompt_tokens)
+    prompt_tokens = max(int(usage.get("promptTokenCount") or 0), 0)
+    cached = min(max(int(usage.get("cachedContentTokenCount") or 0), 0), prompt_tokens)
+    answer = max(int(usage.get("candidatesTokenCount") or 0), 0)
+    thoughts = max(int(usage.get("thoughtsTokenCount") or 0), 0)
     return {
         "input_tokens": prompt_tokens - cached,
-        "output_tokens": int(usage.get("candidatesTokenCount") or 0),
+        "output_tokens": answer + thoughts,
         "cached_read_tokens": cached,
         "cached_write_tokens": 0,
     }
 
 
+def _finish_reason(body: dict[str, Any]) -> str | None:
+    candidates = body.get("candidates")
+    if not isinstance(candidates, list) or not candidates:
+        # No candidate at all is how a prompt blocked before generation
+        # arrives. Reporting the block reason keeps it out of the bucket
+        # labelled "the model returned something we could not parse".
+        feedback = body.get("promptFeedback")
+        if isinstance(feedback, dict) and feedback.get("blockReason"):
+            return str(feedback["blockReason"])
+        return None
+    first = candidates[0]
+    if not isinstance(first, dict):
+        return None
+    reason = first.get("finishReason")
+    return str(reason) if reason else None
+
+
 def _gemini_json(body: dict[str, Any]) -> dict[str, Any] | None:
+    """The answer, with the model's own reasoning left out of it.
+
+    Thinking arrives as extra `parts` on the same candidate, marked `thought`.
+    Concatenating every part and parsing the result is what the first version
+    did, and it fails the moment the model narrates before answering — the
+    JSON is valid and the string it is glued to is not.
+    """
     candidates = body.get("candidates")
     if not isinstance(candidates, list) or not candidates:
         return None
@@ -534,73 +564,16 @@ def _gemini_json(body: dict[str, Any]) -> dict[str, Any] | None:
     parts = content.get("parts")
     if not isinstance(parts, list):
         return None
-    text = "".join(str(part.get("text") or "") for part in parts if isinstance(part, dict))
+    text = "".join(
+        str(part.get("text") or "")
+        for part in parts
+        if isinstance(part, dict) and not part.get("thought")
+    )
     try:
         parsed = json.loads(text)
     except json.JSONDecodeError:
         return None
     return parsed if isinstance(parsed, dict) else None
-
-
-def _usage_of(response: Any) -> dict[str, int]:
-    """Token counts, in this module's own vocabulary.
-
-    Groq reports OpenAI-shaped names — `prompt_tokens` and `completion_tokens`
-    — and `completion_tokens` already includes reasoning tokens, which is the
-    figure that matters because they are billed at the output rate.
-
-    `prompt_tokens` is the **whole** prompt, cached part included, so the
-    cached count is subtracted back out: downstream, `input_tokens` means the
-    uncached remainder billed at the full rate, and folding the two together
-    would make a working cache look like it cost more rather than less. The
-    subtraction is clamped, because a provider figure that exceeds the total
-    it is part of should degrade to zero rather than bill a negative.
-
-    `cached_write_tokens` is always zero here. Populating the cache on this
-    provider is automatic and carries no surcharge, so there is nothing to
-    count; the field stays because the ledger has to be able to describe a
-    provider that does charge for it.
-    """
-    usage = getattr(response, "usage", None)
-    details = getattr(usage, "prompt_tokens_details", None)
-
-    prompt_tokens = int(getattr(usage, "prompt_tokens", 0) or 0)
-    cached = min(int(getattr(details, "cached_tokens", 0) or 0), prompt_tokens)
-
-    return {
-        "input_tokens": prompt_tokens - cached,
-        "output_tokens": int(getattr(usage, "completion_tokens", 0) or 0),
-        "cached_read_tokens": cached,
-        "cached_write_tokens": 0,
-    }
-
-
-def _finish_reason(response: Any) -> str | None:
-    for choice in getattr(response, "choices", None) or []:
-        return str(getattr(choice, "finish_reason", None) or "") or None
-    return None
-
-
-def _first_json(response: Any) -> dict[str, Any] | None:
-    """The structured payload, or `None` if there is not one.
-
-    Structured output guarantees the message content is valid JSON matching
-    the schema — but a `length` stop and a refusal both produce a 200 with
-    something else, so this stays defensive.
-    """
-    for choice in getattr(response, "choices", None) or []:
-        content = getattr(getattr(choice, "message", None), "content", None)
-        # A refusal arrives as a null content with a 200. Named here as well as
-        # in the refusal branch, because a `finish_reason` this module has not
-        # learned about yet must still land on "no JSON", never on a TypeError.
-        if not isinstance(content, str):
-            return None
-        try:
-            parsed = json.loads(content)
-        except json.JSONDecodeError:
-            return None
-        return parsed if isinstance(parsed, dict) else None
-    return None
 
 
 async def _fail(

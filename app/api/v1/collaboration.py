@@ -167,8 +167,6 @@ async def decide_approval(
         note=payload.note,
     )
     requester = (
-        await db.get(User, approval.requested_by_user_id)
-        if approval.requested_by_user_id
-        else None
+        await db.get(User, approval.requested_by_user_id) if approval.requested_by_user_id else None
     )
     return ok(_approval_out(approval, requester.name if requester else None, user.name))

@@ -37,65 +37,78 @@ Effort = Literal["low", "medium", "high"]
 #: the registry rather than one per prompt: the interesting question is "which
 #: build produced this output", and a per-prompt version answers a question
 #: nobody asks while making the comparison harder.
-PROMPT_VERSION: Final = "v3"
+PROMPT_VERSION: Final = "v4"
 
 # Models, by what the call is for. Named here rather than at the call site so
 # a re-tier is one edit — and so nothing in a route can pick a model.
 #
-# These are Groq-hosted ids. Only the `gpt-oss` family is used: on this
-# provider it is the family that supports both `response_format: json_schema`
-# with `strict` and a `reasoning_effort` knob, and the whole request shape
-# below depends on having both.
+# These are Gemini ids, and the tiering is not cosmetic. The free tier's
+# allowance is **20 requests per day per model**, so two tiers is two
+# allowances: pointing every prompt at one id would take the whole product
+# down after twenty requests, while the split lets the short rationales keep
+# working after the flagship has spent its own.
 
-#: The heavy tier — judgement calls the user will check line by line.
-LARGE: Final = "openai/gpt-oss-120b"
-#: The default. Same family, same guarantees, a third of the price; every
-#: call here writes a few hundred words over grounding that is already right.
-MEDIUM: Final = "openai/gpt-oss-120b"
-#: Short single-paragraph rationales, where the smaller model is
-#: indistinguishable and roughly twice as fast.
-SMALL: Final = "openai/gpt-oss-20b"
-GEMINI: Final = "gemini-3.6-flash"
+#: The heavy tier — judgement calls the user will check line by line, and the
+#: architecture prose they will hand to someone else.
+LARGE: Final = "gemini-3.6-flash"
+#: The default. Same model today; kept as its own name so re-tiering the
+#: middle of the registry stays one edit rather than a search and replace.
+MEDIUM: Final = "gemini-3.6-flash"
+#: Short single-paragraph rationales, where the lite model is
+#: indistinguishable and materially faster — and, more to the point, draws on
+#: a separate daily allowance.
+SMALL: Final = "gemini-3.5-flash-lite"
 
 
-#: The tokens-per-minute allowance of the smallest tier this runs on.
-#:
-#: It is here rather than in a config file because it constrains the numbers
-#: directly below it, and a limit kept somewhere else is one nobody consults
-#: before raising a `max_tokens`.
-TIER_TOKENS_PER_MINUTE: Final = 8_000
-
-#: Headroom for the system prompt plus the grounding payload, measured from a
-#: real `stack-architect` run — the largest grounding any prompt here sends.
+#: The largest grounding payload any prompt here sends, measured from a real
+#: `stack-architect` run. Kept next to the reservations below because it is
+#: the other half of what has to fit.
 GROUNDING_ALLOWANCE: Final = 4_500
 
-#: What a prompt may therefore reserve. The provider charges the reservation
-#: against the allowance whether or not it is used, so this is a real ceiling
-#: and not a guideline: exceeding it does not make the call expensive, it
-#: makes the call impossible.
-MAX_OUTPUT_RESERVATION: Final = TIER_TOKENS_PER_MINUTE - GROUNDING_ALLOWANCE
+#: What a prompt may reserve for its answer.
+#:
+#: A spending ceiling, not a provider limit — the models here will emit far
+#: more than this. At the heavy tier's output rate a full reservation is about
+#: three cents, which is the most any single synthesis call is worth.
+#:
+#: The binding constraint is the other direction, and it is the one that bites:
+#: **thinking tokens come out of the same reservation as the answer**. Exhaust
+#: it and the call returns a 200 with `MAX_TOKENS` and no content at all — not
+#: a truncated answer, an empty one, which degrades to `rule_based` and reads
+#: like a schema fault. Measured on the real prompts, thinking runs from 200
+#: tokens on a one-paragraph rationale to 2,700 on the Architect's assessment,
+#: so every number below is sized against *that* and not against the length of
+#: the prose it is meant to produce.
+MAX_OUTPUT_RESERVATION: Final = 8_000
+
+#: And the floor, which is the number that actually gets violated. A prompt
+#: reserving less than this has no room for the model to think before it
+#: answers, and the failure is silent: a 200, no content, `rule_based` on the
+#: page. Every prompt here was measured against a real request before its
+#: number was chosen.
+MIN_OUTPUT_RESERVATION: Final = 2_000
 
 
 class Prompt(NamedTuple):
     purpose: str
     model: str
-    #: Passed through as `reasoning_effort`. Every call here is a short,
-    #: bounded piece of writing over grounding that is already computed, so
-    #: none of them need the top of the ladder — and effort is the main lever
-    #: on both latency and spend, because reasoning tokens are billed at the
-    #: output rate.
+    #: Passed through as `thinkingConfig.thinkingLevel`. Every call here is a
+    #: short, bounded piece of writing over grounding that is already
+    #: computed, so none of them need the top of the ladder — and it is the
+    #: main lever on both latency and spend, because thinking tokens are
+    #: billed at the output rate.
     effort: Effort
-    #: The **reservation**, not a prediction. Groq charges this against the
-    #: per-minute token allowance whether or not it is used, so padding it is
-    #: not free the way it was on a provider that billed only what came back:
-    #: an 8,000-token reservation on a 4,000-token prompt is a 12,000-token
-    #: request, which is how the flagship tool came to fail outright on a tier
-    #: whose limit is 8,000.
+    #: The **reservation**, not a prediction — and on this provider it is
+    #: only charged for what is used, so the risk runs the other way. Too low
+    #: is the failure that matters: thinking is drawn from this budget before
+    #: the answer is, and a reservation thinking exhausts comes back empty.
     #:
-    #: Sized at roughly four times the observed output, which leaves room for
-    #: a long answer and for the reasoning tokens that count against the same
-    #: budget, while keeping prompt + reservation inside a small tier. Too low
-    #: truncates and degrades to `rule_based`; too high never runs at all.
+    #: Sized at several times the observed prose, which is what leaves room
+    #: for the thinking that precedes it. The short-rationale prompts sat at
+    #: 1,500 and intermittently produced a complete first field and nothing
+    #: after it, because a two-field schema whose first field runs long has no
+    #: budget left for the second. That failure reads as a schema fault and is
+    #: a budget one, which is the whole reason this field carries a paragraph.
     max_tokens: int
     system: str
     schema: dict[str, Any]
@@ -145,9 +158,9 @@ def _system(role: str) -> str:
 
 STACK_SYNTHESIS: Final = Prompt(
     purpose="stack_synthesis",
-    model=GEMINI,
+    model=LARGE,
     effort="medium",
-    max_tokens=3000,
+    max_tokens=6000,
     system=_system(
         "For this call: the engine has ranked candidate stacks and scored every "
         "dimension. Choose which of the ranked candidates to recommend — you may "
@@ -284,7 +297,7 @@ ARCHITECTURE_DOCUMENT: Final = Prompt(
     purpose="architecture_document",
     model=LARGE,
     effort="medium",
-    max_tokens=3000,
+    max_tokens=4000,
     system=_system(
         "For this call: write the prose sections of an architecture document for "
         "the selected stack — an overview, the reasoning behind each major choice, "
@@ -301,10 +314,14 @@ COMPATIBILITY_RATIONALE: Final = Prompt(
     purpose="compatibility_rationale",
     model=SMALL,
     effort="low",
-    max_tokens=1500,
+    max_tokens=2500,
     system=_system(
-        "For this call: the engine has scored a set of tools pairwise. Explain what "
-        "the weakest pairing actually costs in practice, in one short paragraph."
+        "For this call: the engine has scored a set of tools pairwise. Explain "
+        "what the weakest pairing means for the team that has to run it — the "
+        "integration work it implies, what breaks first, and what has to be "
+        "operated by hand. Engineering effort, not money: the grounding "
+        "carries no prices and a paragraph about cost becomes a paragraph "
+        "about not being able to calculate one."
     ),
     schema=_obj({"summary": _STR, "weakest_pair_impact": _STR}, ["summary", "weakest_pair_impact"]),
 )
@@ -313,7 +330,7 @@ COMPARISON_RATIONALE: Final = Prompt(
     purpose="comparison_rationale",
     model=SMALL,
     effort="low",
-    max_tokens=1500,
+    max_tokens=2500,
     system=_system(
         "For this call: the engine has scored options against weighted criteria and "
         "picked a winner. Say why the winner won for this profile and when the "
@@ -326,7 +343,7 @@ COST_OPTIMIZATION: Final = Prompt(
     purpose="cost_optimization",
     model=SMALL,
     effort="low",
-    max_tokens=1500,
+    max_tokens=2500,
     system=_system(
         "For this call: the engine has broken a cost down by line. Name the two "
         "changes that would reduce it most, in order, and what each one costs in "

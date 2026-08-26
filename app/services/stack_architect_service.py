@@ -357,10 +357,7 @@ def prefer_approved(
     near = [candidate for candidate in ranked if top - candidate.score.total <= margin]
     far = [candidate for candidate in ranked if top - candidate.score.total > margin]
     near.sort(key=unapproved)
-    return [
-        candidate._replace(rank=position)
-        for position, candidate in enumerate(near + far, 1)
-    ]
+    return [candidate._replace(rank=position) for position, candidate in enumerate(near + far, 1)]
 
 
 def approved_flags(candidate: Candidate, approved: frozenset[str]) -> list[ToolWarning]:

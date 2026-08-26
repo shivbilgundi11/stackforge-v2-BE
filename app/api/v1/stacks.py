@@ -180,9 +180,7 @@ async def list_stacks(
         statement = scoped.owned_by(Stack, user)
 
     rows = (
-        (await db.execute(statement.order_by(Stack.updated_at.desc()).limit(limit)))
-        .scalars()
-        .all()
+        (await db.execute(statement.order_by(Stack.updated_at.desc()).limit(limit))).scalars().all()
     )
     return ok([await _out(db, stack, user) for stack in rows])
 

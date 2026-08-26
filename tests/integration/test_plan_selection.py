@@ -178,10 +178,8 @@ async def test_a_walled_account_still_only_has_the_free_tier(
     assert usage["plan"] == "free"
 
 
-async def test_declining_the_wall_clears_the_debt(
-    client: AsyncClient, db: AsyncSession
-) -> None:
-    """"Continue on Free" is always available. A wall with no way past it
+async def test_declining_the_wall_clears_the_debt(client: AsyncClient, db: AsyncSession) -> None:
+    """ "Continue on Free" is always available. A wall with no way past it
     converts worse than one that can be declined, and support ends up clearing
     the column by hand."""
     await _register(client, "declines@example.com", plan="pro")
@@ -454,9 +452,7 @@ async def test_a_past_due_subscription_walls_only_after_the_grace_period(
 
     assert billing_service.payment_required(user, subscription) is False
 
-    subscription.past_due_since = utcnow() - timedelta(
-        days=settings.dunning_grace_days + 1
-    )
+    subscription.past_due_since = utcnow() - timedelta(days=settings.dunning_grace_days + 1)
     assert billing_service.payment_required(user, subscription) is True
 
 
@@ -496,9 +492,7 @@ async def test_self_serve_does_not_depend_on_this_environment_having_prices(
     assert rows["pro"]["checkout"] is False
 
 
-async def test_a_priced_plan_is_buyable(
-    client: AsyncClient, razorpay: _FakeRazorpay
-) -> None:
+async def test_a_priced_plan_is_buyable(client: AsyncClient, razorpay: _FakeRazorpay) -> None:
     """The mirror, so the pair pins both directions rather than one."""
     rows = {row["key"]: row for row in (await client.get(PLANS)).json()["data"]}
 

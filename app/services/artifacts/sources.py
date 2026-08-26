@@ -67,6 +67,21 @@ def requirements_of(raw: dict[str, Any] | None) -> Requirements:
 
 
 @dataclass(frozen=True)
+class Narrative:
+    """The written half of an architecture document.
+
+    A separate object rather than three optional strings on the source,
+    because the three arrive together or not at all: they are one model call,
+    and a document with an overview but no operations section would be a
+    partial answer presented as a whole one.
+    """
+
+    overview: str
+    decisions: str
+    operations: str
+
+
+@dataclass(frozen=True)
 class StackSource:
     kind = SourceType.STACK
 
@@ -93,6 +108,12 @@ class StackSource:
     #: the more useful figure anyway: a reader of a six-month-old JSON file
     #: needs to know how old the *stack* is, not how old the download is.
     updated_at: datetime
+    #: Written commentary for the architecture document, when a model
+    #: produced some. Carried on the source rather than fetched by the
+    #: generator, so the generator stays a pure function and FR-11's
+    #: "export twice, get the same bytes" stays a unit test: the same source
+    #: — narrative included or not — renders the same document.
+    narrative: Narrative | None = None
 
 
 @dataclass(frozen=True)

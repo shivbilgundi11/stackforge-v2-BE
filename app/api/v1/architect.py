@@ -14,8 +14,9 @@ second path to the same data is a second thing to keep in step.
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Callable
 from decimal import Decimal
-from typing import Any
+from typing import Any, Final
 
 from fastapi import APIRouter
 
@@ -92,6 +93,11 @@ async def run_recommend_stack(
     )
     compatibilities = {index: result for (index, _), result in zip(scored, resolved, strict=True)}
 
+    # Filled by `compute`, read by the roadmap pass that runs after it. A
+    # dict rather than a closure variable because the two halves are written
+    # and read in different functions.
+    document_inputs: dict[str, Any] = {}
+
     def compute() -> ToolOutput:
         ranked = stack_architect_service.prefer_approved(
             stack_architect_service.rank(candidates, requirements, compatibilities),
@@ -117,6 +123,19 @@ async def run_recommend_stack(
         rows = stack_architect_service.component_rows(winner, requirements, approved=approved)
         diagram = stack_diagram_service.mermaid(winner.components, requirements)
         summary = stack_architect_service.rule_summary(winner, requirements)
+
+        # What the exported document is built from, kept so the roadmap pass
+        # can rebuild it with the steps in place. Re-rendering the whole file
+        # is what keeps the download and the screen agreeing; patching the
+        # placeholder line out of the finished markdown would not.
+        document_inputs.update(
+            components=winner.components,
+            requirements=requirements,
+            summary=summary,
+            diagram=diagram,
+            score_rows=winner.score.breakdown(),
+            component_rows=rows,
+        )
 
         return ToolOutput(
             metrics={
@@ -150,12 +169,7 @@ async def run_recommend_stack(
                     format="markdown",
                     filename="stack-architecture.md",
                     content=stack_diagram_service.document(
-                        components=winner.components,
-                        requirements=requirements,
-                        summary=summary,
-                        diagram=diagram,
-                        score_rows=winner.score.breakdown(),
-                        component_rows=rows,
+                        **document_inputs,
                         roadmap=[],
                     ),
                 ),
@@ -174,26 +188,92 @@ async def run_recommend_stack(
         payload=payload,
         identity=identity,
         compute=compute,
-        # The model picks among the candidates the engine produced and writes
-        # the rationale. With no key the ranked result ships unchanged, marked
+        # Two passes, because they are two different jobs. The assessment
+        # picks among the candidates the engine produced and writes the
+        # rationale; the roadmap turns the chosen stack into an ordered build
+        # plan. Splitting them keeps each prompt answering one question, which
+        # is also what lets the roadmap survive an assessment that failed.
+        #
+        # With no key at all the ranked result ships unchanged, marked
         # `rule_based` — the flagship degrades to a complete answer, never to
         # an error page (D-06).
-        enrich=ai_service.enrichment(
-            db,
-            purpose="stack_synthesis",
-            identity=identity,
-            tool_slug="stack-architect",
-            variables=payload.model_dump(mode="json"),
-            apply=_apply_synthesis,
-            generate=ai_service.generate_gemini_json,
+        enrich=ai_service.chain(
+            ai_service.enrichment(
+                db,
+                purpose="stack_synthesis",
+                identity=identity,
+                tool_slug="stack-architect",
+                variables=payload.model_dump(mode="json"),
+                apply=_apply_synthesis,
+            ),
+            ai_service.enrichment(
+                db,
+                purpose="roadmap",
+                identity=identity,
+                tool_slug="stack-architect",
+                variables=payload.model_dump(mode="json"),
+                apply=_roadmap_applier(document_inputs),
+                grounding=_roadmap_grounding,
+            ),
         ),
     )
     return ok(result)
 
 
+ROADMAP_KEYS: Final = ("title", "detail", "effort", "depends_on", "done_when")
+
+
+def _roadmap_grounding(output: ToolOutput) -> dict[str, Any]:
+    """The chosen stack, and nothing else.
+
+    The default grounding is the whole result — scores, alternatives,
+    exclusions, the compatibility matrix. None of that tells anyone what to
+    build first, and all of it competes for the same input budget as the part
+    that does. Handing over the components and the summary keeps the steps
+    about the stack that won rather than about the ones that lost.
+    """
+    return {
+        "summary": str(output.metrics.get("summary", "")),
+        "components": output.tables.get("components", []),
+        "compatibility": output.tables.get("compatibility", []),
+    }
+
+
+def _roadmap_applier(
+    document_inputs: dict[str, Any],
+) -> Callable[[ToolOutput, dict[str, Any]], None]:
+    """Fill the roadmap table, and rebuild the document around it.
+
+    Two places render the roadmap — the result page reads `tables.roadmap`,
+    the exported markdown embeds it — and they are built at different moments.
+    Updating only the first is how a page and its own download come to
+    disagree, which is the one failure this artifact exists to avoid.
+    """
+
+    def apply(output: ToolOutput, data: dict[str, Any]) -> None:
+        steps: list[dict[str, Any]] = [
+            {key: str(step.get(key) or "") for key in ROADMAP_KEYS}
+            for step in data.get("steps") or []
+            if isinstance(step, dict)
+        ]
+        if not steps:
+            return
+
+        output.tables["roadmap"] = steps
+        if not document_inputs:  # pragma: no cover — set whenever a stack ranked
+            return
+        for artifact in output.artifacts:
+            if artifact.type == "architecture":
+                artifact.content = stack_diagram_service.document(
+                    **document_inputs, roadmap=list(steps)
+                )
+
+    return apply
+
+
 def _apply_synthesis(output: ToolOutput, data: dict[str, Any]) -> None:
-    """Merge Gemini's grounded assessment and written analysis."""
-    _apply_gemini_scores(output, data.get("score_breakdown"))
+    """Merge the model's grounded assessment and written analysis."""
+    _apply_model_scores(output, data.get("score_breakdown"))
     if summary := str(data.get("summary") or "").strip():
         output.metrics["summary"] = summary
     if why := str(data.get("why") or "").strip():
@@ -216,7 +296,7 @@ def _apply_synthesis(output: ToolOutput, data: dict[str, Any]) -> None:
         )
 
 
-def _apply_gemini_scores(output: ToolOutput, raw: object) -> None:
+def _apply_model_scores(output: ToolOutput, raw: object) -> None:
     """Replace every visible score row together, or leave the rule score intact."""
     if not isinstance(raw, list):
         return
@@ -397,5 +477,25 @@ async def run_score_stack(db: Db, identity: RunIdentity, payload: ScoreIn) -> di
         payload=payload,
         identity=identity,
         compute=compute,
+        # The matrix is the answer; what it *costs* is the question people
+        # actually arrive with. A 6/10 pairing is a number until someone says
+        # it means writing your own sync job. Scores, statuses, and notes are
+        # the engine's and stay untouched.
+        enrich=ai_service.enrichment(
+            db,
+            purpose="compatibility_rationale",
+            identity=identity,
+            tool_slug="stack-score",
+            variables=payload.model_dump(mode="json"),
+            apply=_apply_compatibility_rationale,
+        ),
     )
     return ok(result)
+
+
+def _apply_compatibility_rationale(output: ToolOutput, data: dict[str, Any]) -> None:
+    """Commentary only. The pairwise scores are the engine's."""
+    if summary := str(data.get("summary") or "").strip():
+        output.metrics["summary"] = summary
+    if impact := str(data.get("weakest_pair_impact") or "").strip():
+        output.metrics["weakest_pair_impact"] = impact

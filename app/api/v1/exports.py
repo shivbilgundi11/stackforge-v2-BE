@@ -118,6 +118,16 @@ async def create_export(db: Db, identity: CallerIdentity, payload: ExportIn) -> 
     source = await sources.resolve(
         db, source_type=resolved, source_id=payload.source_id, identity=identity
     )
+    # Written sections for the exports that show them, and the source
+    # unchanged for the ones that do not. Attached before `create` so the
+    # inline render and the queued build receive the same object.
+    source = await export_service.narrated(
+        db,
+        identity,
+        source,
+        artifact_type=payload.artifact_type,
+        export_format=ExportFormat(payload.format),
+    )
     export = await export_service.create(
         db,
         identity,

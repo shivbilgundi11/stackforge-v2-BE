@@ -42,14 +42,20 @@ def pytest_configure() -> None:
     """Ephemeral signing key, so the suite never depends on a developer's .env
     and never signs anything with a real key.
 
-    Both AI keys are cleared for the same reason, and a stronger one: a
-    developer with `GROQ_API_KEY` in their `.env` would otherwise have `pytest`
-    make live, billable, non-deterministic model calls — and would be running
-    a different suite from CI. Tests that exercise the AI layer set a fake key
-    themselves, which is also what keeps "the whole suite passes with the keys
-    unset" true by construction rather than by hoping.
+    Every AI key is cleared for the same reason, and a stronger one: a
+    developer with `GEMINI_API_KEY` in their `.env` would otherwise have
+    `pytest` make live, billable, non-deterministic model calls — and would be
+    running a different suite from CI. Tests that exercise the AI layer set a
+    fake key themselves, which is also what keeps "the whole suite passes with
+    the keys unset" true by construction rather than by hoping.
+
+    Leaving a key off this list cost a real afternoon once: Stack Architect
+    moved to Gemini, this list did not, and the architect suite quietly began
+    making live calls — which failed the degradation test with
+    `hybrid != rule_based` and burned a free tier measured in requests per
+    day. So the rule is every key, added the same day the setting is.
     """
-    settings.groq_api_key = ""
+    settings.gemini_api_key = ""
     settings.anthropic_api_key = ""
     if not settings.auth_private_key:
         private_pem, public_pem = token_service.generate_keypair()

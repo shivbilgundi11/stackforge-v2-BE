@@ -8,10 +8,16 @@ rates we are charged, and they move on the provider's schedule, not ours.
 Rates are per **million** tokens, matching how they are published. Everything
 downstream works in dollars per token, so the division happens once, here.
 
-Synthesis runs on Groq, so these are Groq's on-demand rates for the models in
-`ai_prompts`. The multipliers below are Groq's too — they are not universal,
-which is the reason they are named constants rather than literals at the
-arithmetic.
+Synthesis runs on Gemini, so these are Google's paid-tier rates for the models
+in `ai_prompts`. The multipliers below are Google's too — they are not
+universal, which is the reason they are named constants rather than literals
+at the arithmetic.
+
+The rates are charged even while a deploy is on the free tier, where the real
+bill is zero. That is deliberate: a ledger that reported nothing until someone
+added a card would make the first paid month a surprise, and the figure it
+reports is what this usage *would* cost — which is the number a capacity
+decision needs.
 """
 
 from __future__ import annotations
@@ -25,18 +31,20 @@ MICRO: Final = Decimal("0.000001")
 
 #: Both are multipliers on the model's input rate.
 #:
-#: Groq's cache is automatic: there is no marker to send, no TTL to choose,
-#: and **no surcharge for populating it** — hence a write multiplier of
-#: exactly 1, which is not a placeholder. `cached_write_tokens` is always zero
-#: on this provider anyway; the constant stays so the arithmetic can describe
-#: a provider that does charge, and so the day one is added the change is a
-#: number here rather than a new term in `cost_of`.
+#: Both are multipliers on the model's input rate.
 #:
-#: A cached read is billed at half. That is a real discount but a much smaller
-#: one than a provider with an explicit cache offers, so cache hits move this
-#: ledger less than the same hit rate used to.
+#: Implicit context caching here is automatic: there is no marker to send, no
+#: TTL to choose, and **no surcharge for populating it** — hence a write
+#: multiplier of exactly 1, which is not a placeholder. `cached_write_tokens`
+#: is always zero on this provider anyway; the constant stays so the
+#: arithmetic can describe a provider that does charge, and so the day one is
+#: added the change is a number here rather than a new term in `cost_of`.
+#:
+#: A cached read is billed at a tenth of the input rate, which is a large
+#: enough discount that a working cache is visible in the ledger rather than
+#: inferred from it.
 CACHE_WRITE_MULTIPLIER: Final = Decimal(1)
-CACHE_READ_MULTIPLIER: Final = Decimal("0.5")
+CACHE_READ_MULTIPLIER: Final = Decimal("0.1")
 
 
 class ModelRate(NamedTuple):
@@ -46,27 +54,28 @@ class ModelRate(NamedTuple):
     #: Shortest prefix that will cache. Below it nothing is cached and no error
     #: is raised — the cached counts simply stay zero. Not uniform across
     #: models, and not monotonic across generations, so it is data rather than
-    #: a constant. Groq does not publish a threshold; these are the observed
-    #: floor and exist to keep the field honest rather than to be relied on,
+    #: a constant. These are the published minimums for implicit caching, and
+    #: they exist to keep the field honest rather than to be relied on,
     #: because a miss on this provider costs the discount and nothing else.
     cache_minimum_tokens: int
 
 
-#: Read off console.groq.com/docs/models and the per-model pages on this date.
-#: Aggregator sites disagree with the vendor on the 120B output rate; the
-#: vendor's own figure is the one here.
-VERIFIED_ON: Final = date(2026, 8, 19)
+#: Read off ai.google.dev/gemini-api/docs/pricing on this date. Output rates
+#: include thinking tokens, which is why `_gemini_usage` folds them into
+#: `output_tokens` rather than reporting them apart.
+VERIFIED_ON: Final = date(2026, 8, 26)
 
 RATES: Final[dict[str, ModelRate]] = {
     "gemini-3.6-flash": ModelRate("gemini-3.6-flash", Decimal("0.75"), Decimal("3.75"), 1024),
-    "openai/gpt-oss-120b": ModelRate("openai/gpt-oss-120b", Decimal("0.15"), Decimal("0.60"), 1024),
-    "openai/gpt-oss-20b": ModelRate("openai/gpt-oss-20b", Decimal("0.075"), Decimal("0.30"), 1024),
+    "gemini-3.5-flash-lite": ModelRate(
+        "gemini-3.5-flash-lite", Decimal("0.10"), Decimal("0.40"), 1024
+    ),
 }
 
 #: Charged when a model we have no rate for is somehow called. Priced at the
 #: most expensive rate on purpose: an unknown model should read as expensive in
 #: the ledger and get noticed, not silently cost nothing.
-FALLBACK_RATE: Final = ModelRate("unknown", Decimal("0.15"), Decimal("0.60"), 1024)
+FALLBACK_RATE: Final = ModelRate("unknown", Decimal("0.75"), Decimal("3.75"), 1024)
 
 
 def rate_for(model: str) -> ModelRate:

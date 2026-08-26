@@ -44,9 +44,7 @@ from app.services import organization_service
 router = APIRouter(tags=["organizations"])
 
 
-async def _out(
-    db: AsyncSession, org: Organization, member: OrganizationMember
-) -> OrganizationOut:
+async def _out(db: AsyncSession, org: Organization, member: OrganizationMember) -> OrganizationOut:
     org_settings = organization_service.settings_of(org)
     return OrganizationOut(
         id=org.id,
@@ -77,9 +75,7 @@ async def _out(
     name="create_organization",
     status_code=201,
 )
-async def create_organization(
-    db: Db, user: CurrentUser, payload: OrganizationIn
-) -> dict[str, Any]:
+async def create_organization(db: Db, user: CurrentUser, payload: OrganizationIn) -> dict[str, Any]:
     org = await organization_service.create(db, user, name=payload.name)
     _, member = await organization_service.get_membership(db, user=user, organization_id=org.id)
     return ok(await _out(db, org, member))
@@ -109,16 +105,12 @@ async def get_organization(db: Db, ctx: OrgViewer) -> dict[str, Any]:
     response_model=Envelope[OrganizationOut],
     name="update_organization",
 )
-async def update_organization(
-    db: Db, ctx: OrgAdmin, payload: OrganizationPatch
-) -> dict[str, Any]:
+async def update_organization(db: Db, ctx: OrgAdmin, payload: OrganizationPatch) -> dict[str, Any]:
     org = await organization_service.update(db, ctx.org, name=payload.name)
     return ok(await _out(db, org, ctx.member))
 
 
-@router.delete(
-    "/organizations/{organization_id}", status_code=204, name="delete_organization"
-)
+@router.delete("/organizations/{organization_id}", status_code=204, name="delete_organization")
 async def delete_organization(db: Db, ctx: OrgOwner) -> None:
     await organization_service.delete(db, ctx.org)
 

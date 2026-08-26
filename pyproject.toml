@@ -34,9 +34,6 @@ dependencies = [
     # "looks like JSON Schema" is the check that lets an invalid tool
     # definition reach the provider, where it fails opaquely days later.
     "jsonschema>=4.23",
-    # M16. Synthesis runs on Groq. The SDK is a hard dependency even though the
-    # key is optional — the module must import and degrade, not fail to import.
-    "groq>=0.11",
     # Not for generation. `anthropic:api` is the only accurate token count for
     # a Claude row in the model catalogue, and `count_tokens` is the endpoint
     # that gives it. Same rule: hard dependency, optional key.

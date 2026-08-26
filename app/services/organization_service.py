@@ -73,9 +73,7 @@ def settings_of(org: Organization) -> OrgSettings:
     return OrgSettings(
         approved_tools=list(raw.get("approved_tools") or []),
         require_approval=bool(raw.get("require_approval", False)),
-        default_visibility=Visibility(
-            raw.get("default_visibility") or Visibility.PRIVATE.value
-        ),
+        default_visibility=Visibility(raw.get("default_visibility") or Visibility.PRIVATE.value),
     )
 
 
@@ -110,9 +108,7 @@ async def get_membership(
     return org, member
 
 
-async def list_for(
-    db: AsyncSession, user: User
-) -> list[tuple[Organization, OrganizationMember]]:
+async def list_for(db: AsyncSession, user: User) -> list[tuple[Organization, OrganizationMember]]:
     rows = (
         await db.execute(
             select(Organization, OrganizationMember)
@@ -229,14 +225,10 @@ async def _validate_tool_slugs(db: AsyncSession, slugs: list[str]) -> None:
 
     if not slugs:
         return
-    known = set(
-        (await db.execute(select(Tool.slug).where(Tool.slug.in_(slugs)))).scalars().all()
-    )
+    known = set((await db.execute(select(Tool.slug).where(Tool.slug.in_(slugs)))).scalars().all())
     unknown = [slug for slug in slugs if slug not in known]
     if unknown:
-        raise ValidationFailed.on_field(
-            "approved_tools", f"Unknown tool slug: {unknown[0]}"
-        )
+        raise ValidationFailed.on_field("approved_tools", f"Unknown tool slug: {unknown[0]}")
 
 
 async def delete(db: AsyncSession, org: Organization) -> None:
@@ -346,9 +338,7 @@ async def remove_member(db: AsyncSession, org: Organization, *, membership_id: s
     await db.flush()
     if user is not None:
         await billing_service.sync_user_plan(db, user)
-    logger.info(
-        "organizations.member_removed", organization_id=org.id, membership_id=membership_id
-    )
+    logger.info("organizations.member_removed", organization_id=org.id, membership_id=membership_id)
 
 
 async def transfer_ownership(
@@ -366,9 +356,7 @@ async def transfer_ownership(
     """
     successor = await _get_member(db, org, to_membership_id)
     if successor.id == owner_member.id:
-        raise ValidationFailed.on_field(
-            "membership_id", "You already own this organization."
-        )
+        raise ValidationFailed.on_field("membership_id", "You already own this organization.")
 
     owner_member.role = OrgRole.ADMIN
     await db.flush()
@@ -559,9 +547,7 @@ async def revoke(db: AsyncSession, org: Organization, *, invitation_id: str) -> 
     invitation = await _get_invitation(db, org, invitation_id)
     invitation.revoked_at = utcnow()
     await db.flush()
-    logger.info(
-        "organizations.invite_revoked", organization_id=org.id, invitation_id=invitation_id
-    )
+    logger.info("organizations.invite_revoked", organization_id=org.id, invitation_id=invitation_id)
 
 
 async def _open_invitation_by_token(db: AsyncSession, token: str) -> Invitation:
@@ -569,11 +555,7 @@ async def _open_invitation_by_token(db: AsyncSession, token: str) -> Invitation:
     invitation = await db.scalar(
         select(Invitation).where(Invitation.token_hash == token_service.hash_secret(token))
     )
-    if (
-        invitation is None
-        or not invitation.is_open
-        or invitation.expires_at <= utcnow()
-    ):
+    if invitation is None or not invitation.is_open or invitation.expires_at <= utcnow():
         raise NotFound("This invitation is invalid or has expired.")
     return invitation
 

@@ -106,9 +106,7 @@ async def _context(
     (or the membership 404), never a 403 that confirms the resource exists.
     """
     org_id = await _resource_org_id(db, kind, resource_id)
-    org, member = await organization_service.get_membership(
-        db, user=user, organization_id=org_id
-    )
+    org, member = await organization_service.get_membership(db, user=user, organization_id=org_id)
     if not member.role.covers(minimum):
         raise Forbidden("Your role in this organization does not allow that.")
     return org, member

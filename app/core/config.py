@@ -90,10 +90,9 @@ class Settings(BaseSettings):
     github_client_secret: str = ""
 
     # ── AI ─────────────────────────────────────────────────────────────────
-    #: General synthesis runs on Groq; without this key those tools return
-    #: their rule-engine answer.
-    groq_api_key: str = ""
-    #: Stack Architect uses Gemini for its structured assessment and score.
+    #: Every synthesis call in the product. Without it, every tool that
+    #: synthesises returns its rule-engine answer marked `rule_based` — which
+    #: is a complete answer, not a degraded one (D-06).
     gemini_api_key: str = ""
     #: Not used for generation. The token calculator counts a Claude row in the
     #: model catalogue with Anthropic's own `count_tokens`, which is the only
@@ -188,10 +187,6 @@ class Settings(BaseSettings):
 
     @property
     def ai_enabled(self) -> bool:
-        return bool(self.groq_api_key)
-
-    @property
-    def gemini_enabled(self) -> bool:
         return bool(self.gemini_api_key)
 
     @property
@@ -199,8 +194,9 @@ class Settings(BaseSettings):
         """Whether Claude rows in the catalogue can be counted exactly.
 
         Deliberately separate from `ai_enabled`: the two keys buy different
-        things, and a deploy with Groq but no Anthropic key must get full
-        synthesis and an honestly-labelled heuristic token count, not neither.
+        things, and a deploy with a Gemini key but no Anthropic key must get
+        full synthesis and an honestly-labelled heuristic token count, not
+        neither.
         """
         return bool(self.anthropic_api_key)
 

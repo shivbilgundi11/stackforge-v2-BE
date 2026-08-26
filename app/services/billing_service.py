@@ -328,9 +328,7 @@ async def select_plan(
     user.pending_plan = plan
     user.pending_interval = interval
     await db.flush()
-    logger.info(
-        "billing.plan_selected", user_id=user.id, plan=plan.value, interval=interval
-    )
+    logger.info("billing.plan_selected", user_id=user.id, plan=plan.value, interval=interval)
 
 
 async def list_invoices(db: AsyncSession, user: User, *, limit: int = 12) -> list[dict[str, Any]]:
@@ -1244,9 +1242,7 @@ async def change_seats(
     subscription.seats = seats
     org.seats_purchased = seats
     await db.flush()
-    logger.info(
-        "billing.seats_changed", organization_id=org.id, seats=seats, used=used
-    )
+    logger.info("billing.seats_changed", organization_id=org.id, seats=seats, used=used)
     return seats, used
 
 

@@ -487,11 +487,14 @@ async def test_an_older_delivery_cannot_roll_back_a_newer_subscription_state(
     latest = int(utcnow().timestamp()) + 10
     active = _subscription_event(user_id=user.id, customer_id=subscription.provider_customer_id)
     active["created_at"] = latest
-    assert await _post_event(
-        client,
-        active,
-        event_id="evt_newer_active",
-    ) == 200
+    assert (
+        await _post_event(
+            client,
+            active,
+            event_id="evt_newer_active",
+        )
+        == 200
+    )
     pending = _subscription_event(
         event="subscription.pending",
         status="pending",
@@ -499,11 +502,14 @@ async def test_an_older_delivery_cannot_roll_back_a_newer_subscription_state(
         customer_id=subscription.provider_customer_id,
     )
     pending["created_at"] = latest - 1
-    assert await _post_event(
-        client,
-        pending,
-        event_id="evt_older_pending",
-    ) == 200
+    assert (
+        await _post_event(
+            client,
+            pending,
+            event_id="evt_older_pending",
+        )
+        == 200
+    )
 
     await db.refresh(subscription)
     assert subscription.status is SubscriptionStatus.ACTIVE
@@ -523,9 +529,7 @@ async def test_an_unprocessed_event_is_retried_rather_than_skipped(
     subscription = await billing_service.get_subscription(db, user)
     assert subscription is not None
 
-    event = _subscription_event(
-        customer_id=subscription.provider_customer_id, user_id=user.id
-    )
+    event = _subscription_event(customer_id=subscription.provider_customer_id, user_id=user.id)
     # The row a previous, failed attempt left behind — same id, same body, and
     # no `processed_at`.
     db.add(
@@ -566,9 +570,7 @@ async def test_a_failing_handler_records_the_error_and_still_answers_200(
     monkeypatch.setattr(billing_service, "_on_subscription_changed", _boom)
 
     await _sign_in(client, db, "failing@example.com")
-    assert (
-        await _post_event(client, _subscription_event(), event_id="evt_fail") == 200
-    )
+    assert await _post_event(client, _subscription_event(), event_id="evt_fail") == 200
 
     record = await db.get(BillingEvent, "evt_fail")
     assert record is not None
@@ -629,9 +631,7 @@ async def test_an_active_subscription_grants_the_plan(
 
     await _post_event(
         client,
-        _subscription_event(
-            customer_id=subscription.provider_customer_id, user_id=user.id
-        ),
+        _subscription_event(customer_id=subscription.provider_customer_id, user_id=user.id),
         event_id="evt_active",
     )
 
@@ -830,9 +830,7 @@ async def test_a_recovered_payment_clears_dunning(
 
     await _post_event(
         client,
-        _subscription_event(
-            event="subscription.charged", customer_id=customer_id, user_id=user.id
-        ),
+        _subscription_event(event="subscription.charged", customer_id=customer_id, user_id=user.id),
         event_id="evt_charged",
     )
 
@@ -870,9 +868,7 @@ async def test_a_failed_payment_emails_once_not_once_per_retry(
         )
 
     dunning = [
-        message
-        for message in outbox.outbox[before:]
-        if "payment" in message.subject.lower()
+        message for message in outbox.outbox[before:] if "payment" in message.subject.lower()
     ]
     assert len(dunning) == 1
 
@@ -890,9 +886,7 @@ async def test_the_billing_page_reports_the_real_state(
 
     await _post_event(
         client,
-        _subscription_event(
-            customer_id=subscription.provider_customer_id, user_id=user.id
-        ),
+        _subscription_event(customer_id=subscription.provider_customer_id, user_id=user.id),
         event_id="evt_surface",
     )
 
@@ -916,9 +910,7 @@ async def test_cancellation_is_at_period_end_and_reversible(
     assert subscription is not None
     await _post_event(
         client,
-        _subscription_event(
-            customer_id=subscription.provider_customer_id, user_id=user.id
-        ),
+        _subscription_event(customer_id=subscription.provider_customer_id, user_id=user.id),
         event_id="evt_rev",
     )
 
@@ -1267,9 +1259,7 @@ async def test_upgrading_above_your_own_plan_is_still_allowed(
     user.plan = Plan.PRO
     await db.commit()
 
-    response = await client.post(
-        CHECKOUT, json={"plan": "team", "interval": "monthly", "seats": 3}
-    )
+    response = await client.post(CHECKOUT, json={"plan": "team", "interval": "monthly", "seats": 3})
 
     assert response.status_code == 200
     assert len(razorpay.subscriptions) == 1

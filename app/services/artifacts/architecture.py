@@ -7,6 +7,13 @@ written from the saved component list and the diagram from the live one.
 Nothing here calls a model. The shape of a stack is determined by its roles,
 which the engine already knows; asking a model to draw it would add a failure
 mode without adding information (D-06).
+
+The document does carry written sections when a model wrote some, but it does
+not fetch them: `StackSource.narrative` arrives already filled by the export
+layer, which is the only place with a session and an identity to spend. That
+keeps the generator a pure function of its source — the same source renders
+the same bytes, with or without a narrative — and keeps FR-11's idempotency
+requirement a unit test rather than a promise.
 """
 
 from __future__ import annotations
@@ -46,7 +53,12 @@ def document(source: StackSource) -> Artifact:
         roadmap=roadmap.steps(source),
     )
 
-    sections = [body, _compatibility_section(source), cost_report.shape_section(source)]
+    sections = [
+        body,
+        _narrative_section(source),
+        _compatibility_section(source),
+        cost_report.shape_section(source),
+    ]
     if source.missing_slugs:
         sections.append(_missing_section(source))
 
@@ -57,6 +69,27 @@ def document(source: StackSource) -> Artifact:
         content="\n".join(part for part in sections if part),
         language="markdown",
     )
+
+
+def _narrative_section(source: StackSource) -> str:
+    """The written sections, or nothing at all.
+
+    Absent rather than apologetic when no model ran. A heading followed by
+    "commentary unavailable" is a hole someone has to explain to whoever they
+    sent the document to; a document that simply does not have the section
+    reads as complete, which it is — every figure above it is the engine's.
+    """
+    narrative = source.narrative
+    if narrative is None:
+        return ""
+
+    parts = [
+        ("Overview", narrative.overview),
+        ("Design decisions", narrative.decisions),
+        ("Operating this stack", narrative.operations),
+    ]
+    written = [f"## {heading}\n\n{body.strip()}\n" for heading, body in parts if body.strip()]
+    return "\n".join(written)
 
 
 def _summary(source: StackSource) -> str:

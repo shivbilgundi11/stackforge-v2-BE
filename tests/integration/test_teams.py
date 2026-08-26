@@ -153,7 +153,12 @@ async def test_role_matrix(
 
     # A member-role target for member-mutating endpoints.
     target_user, _ = await _join(
-        client, db, outbox, org["id"], f"target-{role.value}@example.com", "member",
+        client,
+        db,
+        outbox,
+        org["id"],
+        f"target-{role.value}@example.com",
+        "member",
         owner_token=owner_token,
     )
     target = await _membership_id(db, org["id"], target_user.id)
@@ -171,7 +176,12 @@ async def test_role_matrix(
         actor_token = owner_token
     else:
         _, actor_token = await _join(
-            client, db, outbox, org["id"], f"actor-{role.value}@example.com", role.value,
+            client,
+            db,
+            outbox,
+            org["id"],
+            f"actor-{role.value}@example.com",
+            role.value,
             owner_token=owner_token,
         )
 
@@ -252,18 +262,12 @@ async def test_cross_org_isolation(
 # ── Ownership ───────────────────────────────────────────────────────────────
 
 
-async def test_one_owner_enforced_by_the_database(
-    client: AsyncClient, db: AsyncSession
-) -> None:
+async def test_one_owner_enforced_by_the_database(client: AsyncClient, db: AsyncSession) -> None:
     await _actor(client, db, "solo-owner@example.com", plan=Plan.TEAM)
     org = await _create_org(client, "One Owner")
 
     intruder_id = await register_and_verify(client, db, email="second-owner@example.com")
-    db.add(
-        OrganizationMember(
-            organization_id=org["id"], user_id=intruder_id, role=OrgRole.OWNER
-        )
-    )
+    db.add(OrganizationMember(organization_id=org["id"], user_id=intruder_id, role=OrgRole.OWNER))
     with pytest.raises(IntegrityError):
         await db.flush()
 
@@ -276,7 +280,12 @@ async def test_ownership_transfer(
     owner, owner_token = await _actor(client, db, "old-owner@example.com", plan=Plan.TEAM)
     org = await _create_org(client, "Handover")
     successor, _ = await _join(
-        client, db, outbox, org["id"], "new-owner@example.com", "admin",
+        client,
+        db,
+        outbox,
+        org["id"],
+        "new-owner@example.com",
+        "admin",
         owner_token=owner_token,
     )
     successor_membership = await _membership_id(db, org["id"], successor.id)
@@ -361,8 +370,7 @@ async def test_signup_from_invite_locks_and_verifies_the_email(
     ).scalar_one()
     assert user.email_verified_at is not None
     assert not any(
-        mail.to == "brand-new@example.com" and "Verify" in mail.subject
-        for mail in outbox.outbox
+        mail.to == "brand-new@example.com" and "Verify" in mail.subject for mail in outbox.outbox
     ), "no verification round-trip — the invite already proved the inbox"
 
     # Sign in and accept with the same token.
@@ -568,7 +576,12 @@ async def test_seat_change_adjusts_provider_quantity(
 
     # Below the current membership is refused — remove members, then seats.
     _, _ = await _join(
-        client, db, outbox, org["id"], "occupant@example.com", "member",
+        client,
+        db,
+        outbox,
+        org["id"],
+        "occupant@example.com",
+        "member",
         owner_token=owner_token,
     )
     _use(client, owner_token)
@@ -578,7 +591,12 @@ async def test_seat_change_adjusts_provider_quantity(
     # And only the owner may buy. The admin gets a 403, not a bill.
     _use(client, owner_token)
     _, admin_token = await _join(
-        client, db, outbox, org["id"], "spender@example.com", "admin",
+        client,
+        db,
+        outbox,
+        org["id"],
+        "spender@example.com",
+        "admin",
         owner_token=owner_token,
     )
     _use(client, admin_token)
@@ -600,7 +618,12 @@ async def test_membership_grants_and_removal_revokes_the_team_plan(
     org = await _create_org(client, "Plan Grants")
 
     member, _ = await _join(
-        client, db, outbox, org["id"], "beneficiary@example.com", "member",
+        client,
+        db,
+        outbox,
+        org["id"],
+        "beneficiary@example.com",
+        "member",
         owner_token=owner_token,
     )
     await db.refresh(member)
@@ -638,13 +661,16 @@ async def test_team_visibility_on_stacks(
         )
     ).json()["data"]
     private = (
-        await client.post(
-            "/api/v1/stacks", json={"name": "Private", "component_slugs": ["redis"]}
-        )
+        await client.post("/api/v1/stacks", json={"name": "Private", "component_slugs": ["redis"]})
     ).json()["data"]
 
     _, teammate_token = await _join(
-        client, db, outbox, org["id"], "teammate@example.com", "member",
+        client,
+        db,
+        outbox,
+        org["id"],
+        "teammate@example.com",
+        "member",
         owner_token=owner_token,
     )
 
@@ -657,12 +683,8 @@ async def test_team_visibility_on_stacks(
     assert row["owner_name"] == "Ada Lovelace"
 
     # Readable and editable by a member; the private one is 404.
-    assert (
-        await client.get(f"/api/v1/stacks/{shared['id']}", headers=header)
-    ).status_code == 200
-    assert (
-        await client.get(f"/api/v1/stacks/{private['id']}", headers=header)
-    ).status_code == 404
+    assert (await client.get(f"/api/v1/stacks/{shared['id']}", headers=header)).status_code == 200
+    assert (await client.get(f"/api/v1/stacks/{private['id']}", headers=header)).status_code == 404
 
     response = await client.patch(
         f"/api/v1/stacks/{shared['id']}",
@@ -682,13 +704,16 @@ async def test_team_visibility_on_stacks(
 
     # A viewer reads and never writes.
     _, viewer_token = await _join(
-        client, db, outbox, org["id"], "watcher@example.com", "viewer",
+        client,
+        db,
+        outbox,
+        org["id"],
+        "watcher@example.com",
+        "viewer",
         owner_token=owner_token,
     )
     _use(client, viewer_token)
-    assert (
-        await client.get(f"/api/v1/stacks/{shared['id']}", headers=header)
-    ).status_code == 200
+    assert (await client.get(f"/api/v1/stacks/{shared['id']}", headers=header)).status_code == 200
     response = await client.patch(
         f"/api/v1/stacks/{shared['id']}", json={"name": "Vandalised"}, headers=header
     )
@@ -718,7 +743,12 @@ async def test_comment_thread_mentions_resolve_and_tombstone(
     anchor = {"resource_type": "stack", "resource_id": stack_id}
 
     teammate, teammate_token = await _join(
-        client, db, outbox, org["id"], "replier@example.com", "member",
+        client,
+        db,
+        outbox,
+        org["id"],
+        "replier@example.com",
+        "member",
         owner_token=owner_token,
     )
 
@@ -759,7 +789,12 @@ async def test_comment_thread_mentions_resolve_and_tombstone(
     assert response.json()["data"]["resolved_at"] is not None
 
     _, viewer_token = await _join(
-        client, db, outbox, org["id"], "lurker@example.com", "viewer",
+        client,
+        db,
+        outbox,
+        org["id"],
+        "lurker@example.com",
+        "viewer",
         owner_token=owner_token,
     )
     _use(client, viewer_token)
@@ -781,9 +816,7 @@ async def test_comment_thread_mentions_resolve_and_tombstone(
 
     # Nothing to discuss on a private stack: same 404 as no stack at all.
     private = (
-        await client.post(
-            "/api/v1/stacks", json={"name": "Quiet", "component_slugs": ["redis"]}
-        )
+        await client.post("/api/v1/stacks", json={"name": "Quiet", "component_slugs": ["redis"]})
     ).json()["data"]
     response = await client.get(
         "/api/v1/comments",
@@ -806,7 +839,12 @@ async def test_approval_state_machine(
     anchor = {"resource_type": "stack", "resource_id": stack_id}
 
     _, member_token = await _join(
-        client, db, outbox, org["id"], "requester@example.com", "member",
+        client,
+        db,
+        outbox,
+        org["id"],
+        "requester@example.com",
+        "member",
         owner_token=owner_token,
     )
 
@@ -820,9 +858,7 @@ async def test_approval_state_machine(
     assert (await client.post("/api/v1/approvals", json=anchor)).status_code == 409
 
     # A member cannot decide, and the requester cannot approve themselves.
-    response = await client.patch(
-        f"/api/v1/approvals/{approval['id']}", json={"action": "approve"}
-    )
+    response = await client.patch(f"/api/v1/approvals/{approval['id']}", json={"action": "approve"})
     assert response.status_code == 403
 
     _use(client, owner_token)
@@ -837,9 +873,7 @@ async def test_approval_state_machine(
     assert decided["decided_by"] == "Ada Lovelace"
 
     # Deciding twice is an invalid transition.
-    response = await client.patch(
-        f"/api/v1/approvals/{approval['id']}", json={"action": "reject"}
-    )
+    response = await client.patch(f"/api/v1/approvals/{approval['id']}", json={"action": "reject"})
     assert response.status_code == 409
 
     # A new request opens after a decision; rejection closes it the same way.

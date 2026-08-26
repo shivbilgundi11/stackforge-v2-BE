@@ -14,9 +14,10 @@ go to `count_tokens`, which is the only accurate answer, and which is why this
 module needs a client at all.
 
 That client is Anthropic's, and it is the only one in the process — synthesis
-runs on Groq (`ai_service`) and Groq publishes no token-counting endpoint.
-The two are deliberately not the same key and not the same object: this one is
-a measuring instrument for a **catalogue row the user picked**, not a model we
+runs on Gemini (`ai_service`), and no provider offers a counting endpoint for
+another vendor's tokeniser. The two are deliberately not the same key and not
+the same object: this one is a measuring instrument for a **catalogue row the
+user picked**, not a model we
 generate with, and a deploy may reasonably have one key and not the other. Its
 absence costs a labelled `heuristic` and nothing else.
 
