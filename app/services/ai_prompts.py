@@ -55,6 +55,7 @@ MEDIUM: Final = "openai/gpt-oss-120b"
 #: Short single-paragraph rationales, where the smaller model is
 #: indistinguishable and roughly twice as fast.
 SMALL: Final = "openai/gpt-oss-20b"
+GEMINI: Final = "gemini-2.5-flash"
 
 
 #: The tokens-per-minute allowance of the smallest tier this runs on.
@@ -144,7 +145,7 @@ def _system(role: str) -> str:
 
 STACK_SYNTHESIS: Final = Prompt(
     purpose="stack_synthesis",
-    model=LARGE,
+    model=GEMINI,
     effort="medium",
     max_tokens=3000,
     system=_system(
@@ -157,6 +158,32 @@ STACK_SYNTHESIS: Final = Prompt(
     schema=_obj(
         {
             "recommended_id": _STR,
+            "score_breakdown": {
+                "type": "array",
+                "minItems": 10,
+                "maxItems": 10,
+                "items": _obj(
+                    {
+                        "key": {
+                            "type": "string",
+                            "enum": [
+                                "cost_efficiency",
+                                "scalability",
+                                "developer_experience",
+                                "production_readiness",
+                                "security_readiness",
+                                "vendor_lock_in",
+                                "integration_compatibility",
+                                "deployment_complexity",
+                                "community_maturity",
+                                "documentation_quality",
+                            ],
+                        },
+                        "score": {"type": "number"},
+                    },
+                    ["key", "score"],
+                ),
+            },
             "confidence": {"type": "string", "enum": ["high", "medium", "low"]},
             "summary": _STR,
             "why": _STR,
@@ -174,7 +201,16 @@ STACK_SYNTHESIS: Final = Prompt(
                 ),
             },
         },
-        ["recommended_id", "confidence", "summary", "why", "trade_offs", "switch_when", "risks"],
+        [
+            "recommended_id",
+            "score_breakdown",
+            "confidence",
+            "summary",
+            "why",
+            "trade_offs",
+            "switch_when",
+            "risks",
+        ],
     ),
 )
 

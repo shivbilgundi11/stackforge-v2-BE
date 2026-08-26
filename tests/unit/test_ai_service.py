@@ -110,6 +110,50 @@ async def _outcomes(db: AsyncSession) -> list[AiOutcome]:
     return list(rows)
 
 
+async def test_gemini_stack_synthesis_uses_structured_output(
+    db: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    class Client:
+        def __init__(self) -> None:
+            self.calls: list[dict[str, Any]] = []
+
+        async def __aenter__(self) -> Client:
+            return self
+
+        async def __aexit__(self, *args: Any) -> None:
+            return None
+
+        async def post(self, url: str, **kwargs: Any) -> httpx.Response:
+            self.calls.append({"url": url, **kwargs})
+            return httpx.Response(
+                200,
+                request=httpx.Request("POST", url),
+                json={
+                    "candidates": [{"content": {"parts": [{"text": '{"summary":"ok"}'}]}}],
+                    "usageMetadata": {"promptTokenCount": 100, "candidatesTokenCount": 20},
+                },
+            )
+
+    client = Client()
+    monkeypatch.setattr(settings, "gemini_api_key", "gemini-test")
+    monkeypatch.setattr(ai_service.httpx, "AsyncClient", lambda **_: client)
+
+    result = await ai_service.generate_gemini_json(
+        db,
+        purpose="stack_synthesis",
+        grounding={"metrics": {}},
+        variables={},
+        identity=_identity(),
+        tool_slug="stack-architect",
+    )
+
+    assert result is not None and result.data == {"summary": "ok"}
+    sent = client.calls[0]
+    assert sent["headers"] == {"x-goog-api-key": "gemini-test"}
+    assert sent["json"]["generationConfig"]["responseMimeType"] == "application/json"
+    assert sent["json"]["generationConfig"]["responseSchema"] == ai_prompts.STACK_SYNTHESIS.schema
+
+
 # ── the None contract ────────────────────────────────────────────────────────
 
 

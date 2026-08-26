@@ -42,6 +42,7 @@ from decimal import Decimal
 from typing import Any, Final, NamedTuple
 
 import groq
+import httpx
 from groq import AsyncGroq
 from groq.types.chat import (
     ChatCompletionMessageParam,
@@ -65,6 +66,9 @@ logger = get_logger("ai")
 #: A synthesis call that has not answered in this long is not going to save the
 #: request. The deterministic result is already computed and waiting.
 TIMEOUT_SECONDS: Final = 60.0
+GEMINI_GENERATE_CONTENT_URL: Final = (
+    "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
+)
 
 #: `finish_reason` values that mean the model declined rather than answered.
 #: A declined request is a 200 with no usable content, so it has to be named
@@ -98,6 +102,99 @@ def set_client(client: AsyncGroq | None) -> None:
 class AiResult(NamedTuple):
     data: dict[str, Any]
     meta: AiMeta
+
+
+async def generate_gemini_json(
+    db: AsyncSession,
+    *,
+    purpose: str,
+    grounding: dict[str, Any],
+    variables: dict[str, Any],
+    identity: Identity,
+    tool_slug: str | None = None,
+) -> AiResult | None:
+    """Call Gemini's Generate Content API and return structured output."""
+    prompt = ai_prompts.REGISTRY.get(purpose)
+    if prompt is None:  # pragma: no cover
+        return None
+    if not settings.gemini_enabled:
+        await _record(db, prompt, identity, tool_slug, AiOutcome.DISABLED, latency_ms=0)
+        return None
+    if _exhausted(await quota_remaining(db, identity)):
+        await _record(db, prompt, identity, tool_slug, AiOutcome.QUOTA_EXCEEDED, latency_ms=0)
+        return None
+
+    started = time.perf_counter()
+    payload = {
+        "systemInstruction": {"parts": [{"text": prompt.system}]},
+        "contents": [
+            {"role": "user", "parts": [{"text": ai_prompts.user_turn(grounding, variables)}]}
+        ],
+        "generationConfig": {
+            "maxOutputTokens": prompt.max_tokens,
+            "responseMimeType": "application/json",
+            "responseSchema": prompt.schema,
+        },
+    }
+    try:
+        async with httpx.AsyncClient(timeout=TIMEOUT_SECONDS) as client:
+            response = await client.post(
+                GEMINI_GENERATE_CONTENT_URL.format(model=prompt.model),
+                headers={"x-goog-api-key": settings.gemini_api_key},
+                json=payload,
+            )
+            response.raise_for_status()
+            body = response.json()
+    except httpx.TimeoutException as exc:
+        await _fail(db, prompt, identity, tool_slug, AiOutcome.TIMEOUT, started, exc)
+        return None
+    except httpx.HTTPStatusError as exc:
+        outcome = AiOutcome.RATE_LIMITED if exc.response.status_code == 429 else AiOutcome.API_ERROR
+        await _fail(db, prompt, identity, tool_slug, outcome, started, exc)
+        return None
+    except (httpx.HTTPError, ValueError) as exc:
+        await _fail(db, prompt, identity, tool_slug, AiOutcome.API_ERROR, started, exc)
+        return None
+
+    latency_ms = int((time.perf_counter() - started) * 1000)
+    usage = _gemini_usage(body)
+    data = _gemini_json(body)
+    if data is None:
+        await _record(
+            db,
+            prompt,
+            identity,
+            tool_slug,
+            AiOutcome.INVALID_OUTPUT,
+            latency_ms=latency_ms,
+            usage=usage,
+        )
+        await _consume_quota(db, identity)
+        return None
+
+    cost = ai_pricing.cost_of(model=prompt.model, **usage)
+    await _record(
+        db,
+        prompt,
+        identity,
+        tool_slug,
+        AiOutcome.SUCCESS,
+        latency_ms=latency_ms,
+        usage=usage,
+        cost=cost,
+    )
+    await _consume_quota(db, identity)
+    return AiResult(
+        data=data,
+        meta=AiMeta(
+            model=prompt.model,
+            prompt_version=ai_prompts.PROMPT_VERSION,
+            input_tokens=usage["input_tokens"],
+            output_tokens=usage["output_tokens"],
+            cost_usd=cost,
+            latency_ms=latency_ms,
+        ),
+    )
 
 
 async def quota_remaining(db: AsyncSession, identity: Identity) -> int | None:
@@ -339,6 +436,7 @@ def enrichment(
     tool_slug: str,
     apply: Callable[[ToolOutput, dict[str, Any]], None],
     grounding: Callable[[ToolOutput], dict[str, Any]] | None = None,
+    generate: Callable[..., Awaitable[AiResult | None]] = generate_json,
 ) -> Callable[[ToolOutput], Awaitable[AiMeta | None]]:
     """Build the `enrich` callable `run_tool` takes.
 
@@ -376,7 +474,7 @@ def enrichment(
             return None
 
         facts = grounding(output) if grounding else _default_grounding(output)
-        result = await generate_json(
+        result = await generate(
             db,
             purpose=purpose,
             grounding=facts,
@@ -407,6 +505,41 @@ def _default_grounding(output: ToolOutput) -> dict[str, Any]:
             {"level": warning.level, "message": warning.message} for warning in output.warnings
         ],
     }
+
+
+def _gemini_usage(body: dict[str, Any]) -> dict[str, int]:
+    usage = body.get("usageMetadata")
+    if not isinstance(usage, dict):
+        usage = {}
+    prompt_tokens = int(usage.get("promptTokenCount") or 0)
+    cached = min(int(usage.get("cachedContentTokenCount") or 0), prompt_tokens)
+    return {
+        "input_tokens": prompt_tokens - cached,
+        "output_tokens": int(usage.get("candidatesTokenCount") or 0),
+        "cached_read_tokens": cached,
+        "cached_write_tokens": 0,
+    }
+
+
+def _gemini_json(body: dict[str, Any]) -> dict[str, Any] | None:
+    candidates = body.get("candidates")
+    if not isinstance(candidates, list) or not candidates:
+        return None
+    first = candidates[0]
+    if not isinstance(first, dict):
+        return None
+    content = first.get("content")
+    if not isinstance(content, dict):
+        return None
+    parts = content.get("parts")
+    if not isinstance(parts, list):
+        return None
+    text = "".join(str(part.get("text") or "") for part in parts if isinstance(part, dict))
+    try:
+        parsed = json.loads(text)
+    except json.JSONDecodeError:
+        return None
+    return parsed if isinstance(parsed, dict) else None
 
 
 def _usage_of(response: Any) -> dict[str, int]:

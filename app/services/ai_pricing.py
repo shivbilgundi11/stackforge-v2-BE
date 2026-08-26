@@ -58,6 +58,7 @@ class ModelRate(NamedTuple):
 VERIFIED_ON: Final = date(2026, 8, 19)
 
 RATES: Final[dict[str, ModelRate]] = {
+    "gemini-2.5-flash": ModelRate("gemini-2.5-flash", Decimal("0.30"), Decimal("2.50"), 1024),
     "openai/gpt-oss-120b": ModelRate("openai/gpt-oss-120b", Decimal("0.15"), Decimal("0.60"), 1024),
     "openai/gpt-oss-20b": ModelRate("openai/gpt-oss-20b", Decimal("0.075"), Decimal("0.30"), 1024),
 }

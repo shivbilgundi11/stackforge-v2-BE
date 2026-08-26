@@ -14,6 +14,7 @@ second path to the same data is a second thing to keep in step.
 from __future__ import annotations
 
 import asyncio
+from decimal import Decimal
 from typing import Any
 
 from fastapi import APIRouter
@@ -184,13 +185,15 @@ async def run_recommend_stack(
             tool_slug="stack-architect",
             variables=payload.model_dump(mode="json"),
             apply=_apply_synthesis,
+            generate=ai_service.generate_gemini_json,
         ),
     )
     return ok(result)
 
 
 def _apply_synthesis(output: ToolOutput, data: dict[str, Any]) -> None:
-    """Merge the written analysis in. Components and scores are untouched."""
+    """Merge Gemini's grounded assessment and written analysis."""
+    _apply_gemini_scores(output, data.get("score_breakdown"))
     if summary := str(data.get("summary") or "").strip():
         output.metrics["summary"] = summary
     if why := str(data.get("why") or "").strip():
@@ -211,6 +214,43 @@ def _apply_synthesis(output: ToolOutput, data: dict[str, Any]) -> None:
         output.warnings.append(
             ToolWarning(level=level, message=f"{risk.get('risk')} — {risk.get('mitigation')}")
         )
+
+
+def _apply_gemini_scores(output: ToolOutput, raw: object) -> None:
+    """Replace every visible score row together, or leave the rule score intact."""
+    if not isinstance(raw, list):
+        return
+    scores: dict[str, Decimal] = {}
+    for item in raw:
+        if not isinstance(item, dict):
+            return
+        key, value = item.get("key"), item.get("score")
+        if (
+            not isinstance(key, str)
+            or not isinstance(value, (int, float))
+            or isinstance(value, bool)
+        ):
+            return
+        score = Decimal(str(value))
+        if not Decimal(0) <= score <= Decimal(10):
+            return
+        scores[key] = score
+
+    rows = output.tables.get("score_breakdown")
+    if not isinstance(rows, list) or set(scores) != set(stack_score_service.BY_KEY):
+        return
+
+    total = Decimal(0)
+    for row in rows:
+        key = row.get("key")
+        if not isinstance(key, str) or key not in scores:
+            return
+        score = scores[key].quantize(Decimal("0.1"))
+        contribution = (score * Decimal(str(row["weight_pct"])) / 10).quantize(Decimal("0.1"))
+        row["score"] = str(score)
+        row["contribution"] = str(contribution)
+        total += contribution
+    output.metrics["score"] = total.quantize(Decimal("0.1"))
 
 
 def _alternative_rows(
