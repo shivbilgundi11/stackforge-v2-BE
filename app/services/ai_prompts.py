@@ -37,7 +37,7 @@ Effort = Literal["low", "medium", "high"]
 #: the registry rather than one per prompt: the interesting question is "which
 #: build produced this output", and a per-prompt version answers a question
 #: nobody asks while making the comparison harder.
-PROMPT_VERSION: Final = "v4"
+PROMPT_VERSION: Final = "v5"
 
 # Models, by what the call is for. Named here rather than at the call site so
 # a re-tier is one edit — and so nothing in a route can pick a model.
@@ -163,40 +163,26 @@ STACK_SYNTHESIS: Final = Prompt(
     max_tokens=6000,
     system=_system(
         "For this call: the engine has ranked candidate stacks and scored every "
-        "dimension. Choose which of the ranked candidates to recommend — you may "
-        "only choose one the engine produced — and explain why it beats the others "
-        "for these specific requirements. Name the real trade-off being made, and "
-        "the condition under which the second choice would be the better answer."
+        "dimension. The stack in `components` is rank 1; `alternatives` lists the "
+        "rest, each with its own rank. Choose which of them to recommend by "
+        "returning its rank in `recommended_rank` — rank 1 unless another candidate "
+        "genuinely fits these requirements better — and explain why the one you "
+        "chose beats the others for these specific requirements. Name the real "
+        "trade-off being made, and the condition under which the runner-up would be "
+        "the better answer.\n\n"
+        "The ten dimension scores and the total out of 100 belong to the engine and "
+        "are not yours to revise. Quote the ones belonging to the stack you chose; "
+        "if a figure looks wrong, raise it as a risk rather than restating it."
     ),
     schema=_obj(
         {
-            "recommended_id": _STR,
-            "score_breakdown": {
-                "type": "array",
-                "minItems": 10,
-                "maxItems": 10,
-                "items": _obj(
-                    {
-                        "key": {
-                            "type": "string",
-                            "enum": [
-                                "cost_efficiency",
-                                "scalability",
-                                "developer_experience",
-                                "production_readiness",
-                                "security_readiness",
-                                "vendor_lock_in",
-                                "integration_compatibility",
-                                "deployment_complexity",
-                                "community_maturity",
-                                "documentation_quality",
-                            ],
-                        },
-                        "score": {"type": "number"},
-                    },
-                    ["key", "score"],
-                ),
-            },
+            # The chosen candidate's rank, as a string: the "no numeric or
+            # length keywords" rule at the top of this module rules out
+            # bounding an integer, and an enum says the same thing in a form
+            # structured output accepts. `rank` is what the grounding already
+            # carries, so there is no second identifier to keep in step, and a
+            # rank the engine never offered reads as no answer at all.
+            "recommended_rank": {"type": "string", "enum": ["1", "2", "3"]},
             "confidence": {"type": "string", "enum": ["high", "medium", "low"]},
             "summary": _STR,
             "why": _STR,
@@ -215,8 +201,7 @@ STACK_SYNTHESIS: Final = Prompt(
             },
         },
         [
-            "recommended_id",
-            "score_breakdown",
+            "recommended_rank",
             "confidence",
             "summary",
             "why",

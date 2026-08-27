@@ -15,7 +15,6 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Callable
-from decimal import Decimal
 from typing import Any, Final
 
 from fastapi import APIRouter
@@ -93,36 +92,27 @@ async def run_recommend_stack(
     )
     compatibilities = {index: result for (index, _), result in zip(scored, resolved, strict=True)}
 
-    # Filled by `compute`, read by the roadmap pass that runs after it. A
-    # dict rather than a closure variable because the two halves are written
-    # and read in different functions.
+    # Filled by `compute`, read by the two passes that run after it: synthesis
+    # may re-point the result at another candidate, and the roadmap pass
+    # rebuilds the document around its steps. Held here rather than in closure
+    # variables because each half is written and read in a different function.
     document_inputs: dict[str, Any] = {}
+    ranked_stacks: list[stack_architect_service.Candidate] = []
 
-    def compute() -> ToolOutput:
-        ranked = stack_architect_service.prefer_approved(
-            stack_architect_service.rank(candidates, requirements, compatibilities),
-            approved,
-        )
-        if not ranked:
-            return ToolOutput(
-                metrics={"score": 0, "components": 0, "candidates": 0},
-                tables={"exclusions": _exclusion_rows(eliminations)},
-                warnings=[
-                    ToolWarning(
-                        level="critical",
-                        message=(
-                            "No stack satisfies every constraint at once. The exclusions "
-                            "table shows which constraint removed what — relaxing the "
-                            "tightest one is the fastest way to a result."
-                        ),
-                    )
-                ],
-            )
+    def build(winner: stack_architect_service.Candidate) -> ToolOutput:
+        """The complete result for one candidate.
 
-        winner = ranked[0]
+        Called by `compute` for the engine's leader, and called again by the
+        synthesis pass when the model picks a different one — M15 layer 2, "the
+        model chooses among options the engine produced". One builder rather
+        than two: every table, the diagram, the alternatives and the exported
+        document all describe *a* stack, and a swap that rebuilt some of them
+        would put one stack's picture over another's numbers.
+        """
         rows = stack_architect_service.component_rows(winner, requirements, approved=approved)
         diagram = stack_diagram_service.mermaid(winner.components, requirements)
         summary = stack_architect_service.rule_summary(winner, requirements)
+        others = [candidate for candidate in ranked_stacks if candidate.rank != winner.rank]
 
         # What the exported document is built from, kept so the roadmap pass
         # can rebuild it with the steps in place. Re-rendering the whole file
@@ -152,7 +142,7 @@ async def run_recommend_stack(
             tables={
                 "components": rows,
                 "score_breakdown": winner.score.breakdown(),
-                "alternatives": _alternative_rows(ranked[1:], requirements),
+                "alternatives": _alternative_rows(others, requirements),
                 "compatibility": _compatibility_rows(winner),
                 "exclusions": _exclusion_rows(eliminations),
                 "roadmap": [],
@@ -181,6 +171,30 @@ async def run_recommend_stack(
             sourced_from=[tool.slug for tool in winner.components],
         )
 
+    def compute() -> ToolOutput:
+        ranked = stack_architect_service.prefer_approved(
+            stack_architect_service.rank(candidates, requirements, compatibilities),
+            approved,
+        )
+        if not ranked:
+            return ToolOutput(
+                metrics={"score": 0, "components": 0, "candidates": 0},
+                tables={"exclusions": _exclusion_rows(eliminations)},
+                warnings=[
+                    ToolWarning(
+                        level="critical",
+                        message=(
+                            "No stack satisfies every constraint at once. The exclusions "
+                            "table shows which constraint removed what — relaxing the "
+                            "tightest one is the fastest way to a result."
+                        ),
+                    )
+                ],
+            )
+
+        ranked_stacks[:] = ranked
+        return build(ranked[0])
+
     result = await tool_service.run_tool(
         db,
         slug="stack-architect",
@@ -204,7 +218,7 @@ async def run_recommend_stack(
                 identity=identity,
                 tool_slug="stack-architect",
                 variables=payload.model_dump(mode="json"),
-                apply=_apply_synthesis,
+                apply=_synthesis_applier(build, ranked_stacks),
             ),
             ai_service.enrichment(
                 db,
@@ -271,66 +285,84 @@ def _roadmap_applier(
     return apply
 
 
-def _apply_synthesis(output: ToolOutput, data: dict[str, Any]) -> None:
-    """Merge the model's grounded assessment and written analysis."""
-    _apply_model_scores(output, data.get("score_breakdown"))
-    if summary := str(data.get("summary") or "").strip():
-        output.metrics["summary"] = summary
-    if why := str(data.get("why") or "").strip():
-        output.metrics["rationale"] = why
-    if confidence := str(data.get("confidence") or "").strip():
-        output.metrics["confidence"] = confidence
+def _synthesis_applier(
+    build: Callable[[stack_architect_service.Candidate], ToolOutput],
+    ranked: list[stack_architect_service.Candidate],
+) -> Callable[[ToolOutput, dict[str, Any]], None]:
+    """Merge the model's selection, assessment and written analysis.
 
-    rationale: list[dict[str, Any]] = []
-    rationale += [{"kind": "tradeoff", "text": str(item)} for item in data.get("trade_offs") or []]
-    rationale += [
-        {"kind": "switch_when", "text": str(item)} for item in data.get("switch_when") or []
-    ]
-    if rationale:
-        output.tables["rationale"] = rationale
+    A closure over the builder and the ranking, because the model's first
+    answer is *which* stack — and honouring that means rebuilding the result,
+    not editing the one already in hand.
+    """
 
-    for risk in data.get("risks") or []:
-        level = {"high": "critical", "medium": "warning"}.get(str(risk.get("severity")), "info")
-        output.warnings.append(
-            ToolWarning(level=level, message=f"{risk.get('risk')} — {risk.get('mitigation')}")
-        )
+    def apply(output: ToolOutput, data: dict[str, Any]) -> None:
+        _apply_choice(output, data.get("recommended_rank"), build, ranked)
+        if summary := str(data.get("summary") or "").strip():
+            output.metrics["summary"] = summary
+        if why := str(data.get("why") or "").strip():
+            output.metrics["rationale"] = why
+        if confidence := str(data.get("confidence") or "").strip():
+            output.metrics["confidence"] = confidence
+
+        rationale: list[dict[str, Any]] = []
+        rationale += [
+            {"kind": "tradeoff", "text": str(item)} for item in data.get("trade_offs") or []
+        ]
+        rationale += [
+            {"kind": "switch_when", "text": str(item)} for item in data.get("switch_when") or []
+        ]
+        if rationale:
+            output.tables["rationale"] = rationale
+
+        for risk in data.get("risks") or []:
+            level = {"high": "critical", "medium": "warning"}.get(str(risk.get("severity")), "info")
+            output.warnings.append(
+                ToolWarning(level=level, message=f"{risk.get('risk')} — {risk.get('mitigation')}")
+            )
+
+    return apply
 
 
-def _apply_model_scores(output: ToolOutput, raw: object) -> None:
-    """Replace every visible score row together, or leave the rule score intact."""
-    if not isinstance(raw, list):
+def _apply_choice(
+    output: ToolOutput,
+    raw: object,
+    build: Callable[[stack_architect_service.Candidate], ToolOutput],
+    ranked: list[stack_architect_service.Candidate],
+) -> None:
+    """Re-point the whole result at the candidate the model picked.
+
+    The engine ranks and the model selects among what it ranked (M15 layer 2).
+    Selecting was the one half of that contract the schema asked for and
+    nothing read: the model named a stack, the page shipped the engine's
+    leader, and a rationale arguing for the runner-up sat above the winner's
+    component table.
+
+    Everything is replaced together, from the builder, for the same reason the
+    builder exists at all. `warnings` can be assigned rather than merged
+    because nothing has appended to it yet — the risks below are the first,
+    and `run_tool` only touches it if `enrich` raises.
+
+    A rank the engine never offered leaves the leader in place: that is a
+    malformed answer, and the fallback for a malformed answer is the
+    deterministic result (D-06).
+    """
+    try:
+        chosen = int(str(raw))
+    except (TypeError, ValueError):
         return
-    scores: dict[str, Decimal] = {}
-    for item in raw:
-        if not isinstance(item, dict):
-            return
-        key, value = item.get("key"), item.get("score")
-        if (
-            not isinstance(key, str)
-            or not isinstance(value, (int, float))
-            or isinstance(value, bool)
-        ):
-            return
-        score = Decimal(str(value))
-        if not Decimal(0) <= score <= Decimal(10):
-            return
-        scores[key] = score
 
-    rows = output.tables.get("score_breakdown")
-    if not isinstance(rows, list) or set(scores) != set(stack_score_service.BY_KEY):
+    winner = next((candidate for candidate in ranked if candidate.rank == chosen), None)
+    if winner is None or winner is ranked[0]:
         return
 
-    total = Decimal(0)
-    for row in rows:
-        key = row.get("key")
-        if not isinstance(key, str) or key not in scores:
-            return
-        score = scores[key].quantize(Decimal("0.1"))
-        contribution = (score * Decimal(str(row["weight_pct"])) / 10).quantize(Decimal("0.1"))
-        row["score"] = str(score)
-        row["contribution"] = str(contribution)
-        total += contribution
-    output.metrics["score"] = total.quantize(Decimal("0.1"))
+    rebuilt = build(winner)
+    output.metrics = rebuilt.metrics
+    output.tables = rebuilt.tables
+    output.series = rebuilt.series
+    output.artifacts = rebuilt.artifacts
+    output.warnings = rebuilt.warnings
+    output.sourced_from = rebuilt.sourced_from
 
 
 def _alternative_rows(

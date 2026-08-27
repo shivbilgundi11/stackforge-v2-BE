@@ -106,22 +106,7 @@ async def _purposes(db: AsyncSession) -> list[tuple[str, AiOutcome]]:
 
 
 SYNTHESIS_REPLY = {
-    "recommended_id": "candidate-1",
-    "score_breakdown": [
-        {"key": key, "score": 8}
-        for key in (
-            "cost_efficiency",
-            "scalability",
-            "developer_experience",
-            "production_readiness",
-            "security_readiness",
-            "vendor_lock_in",
-            "integration_compatibility",
-            "deployment_complexity",
-            "community_maturity",
-            "documentation_quality",
-        )
-    ],
+    "recommended_rank": "1",
     "confidence": "high",
     "summary": "A managed-model RAG stack sized for one team.",
     "why": "It clears every hard constraint and costs the least of the ones that do.",
@@ -174,6 +159,113 @@ async def test_the_architect_roadmap_is_written_by_a_model_and_reaches_the_page(
         ("stack_synthesis", AiOutcome.SUCCESS),
         ("roadmap", AiOutcome.SUCCESS),
     ]
+
+
+DIMENSION_KEYS = (
+    "cost_efficiency",
+    "scalability",
+    "developer_experience",
+    "production_readiness",
+    "security_readiness",
+    "vendor_lock_in",
+    "integration_compatibility",
+    "deployment_complexity",
+    "community_maturity",
+    "documentation_quality",
+)
+
+
+async def test_the_headline_score_stays_the_engines_through_synthesis(
+    client: AsyncClient, gemini: Any
+) -> None:
+    """The number on the ring and the number in the prose are one number.
+
+    The schema used to ask the model for its own ten dimension scores, and the
+    route recomputed the headline from them — *after* handing the model the
+    engine's total as grounding and telling it never to restate a number
+    differently. The page then showed one total above a paragraph quoting
+    another, and the breakdown rows summed to neither. A model that answers in
+    the old shape must not move the arithmetic.
+    """
+    gemini(
+        {
+            "stack_synthesis": {
+                **SYNTHESIS_REPLY,
+                "score_breakdown": [{"key": key, "score": 10} for key in DIMENSION_KEYS],
+            },
+            "roadmap": ROADMAP_REPLY,
+        }
+    )
+
+    response = await client.post("/api/v1/architect/recommend", json={})
+    data = response.json()["data"]
+    assert data["source"] == "hybrid"
+
+    score = float(data["metrics"]["score"])
+    assert score < 100, "a perfect ten on every dimension reached the headline"
+    total = sum(float(row["contribution"]) for row in data["tables"]["score_breakdown"])
+    assert abs(total - score) < 0.6, "the breakdown no longer sums to the headline"
+    assert all(float(row["score"]) < 10 for row in data["tables"]["score_breakdown"])
+
+
+async def test_the_model_can_pick_a_runner_up_and_the_whole_page_follows(
+    client: AsyncClient, gemini: Any
+) -> None:
+    """M15 layer 2: the engine ranks, the model selects among what it ranked.
+
+    The schema always asked for that selection and nothing ever read it, so a
+    rationale arguing for the runner-up shipped above the leader's component
+    table. Selecting has to move every panel at once — score, components,
+    diagram, alternatives and the export — or the page contradicts itself
+    somewhere new instead.
+    """
+    gemini(
+        {
+            "stack_synthesis": {**SYNTHESIS_REPLY, "recommended_rank": "2"},
+            "roadmap": ROADMAP_REPLY,
+        }
+    )
+
+    response = await client.post("/api/v1/architect/recommend", json={})
+    data = response.json()["data"]
+    assert data["source"] == "hybrid"
+
+    # The stack the engine led with is now the alternative, and the one the
+    # model chose is no longer offered as one.
+    alternatives = data["tables"]["alternatives"]
+    ranks = [row["rank"] for row in alternatives]
+    assert 1 in ranks, "the model's pick did not reach the page"
+    assert 2 not in ranks, "the recommendation is still listed against itself"
+
+    # Its own score, not the leader's — and the leader still outranks it,
+    # which is the trade the rationale is there to justify.
+    leader = next(row for row in alternatives if row["rank"] == 1)
+    assert float(leader["score"]) >= float(data["metrics"]["score"])
+
+    diagram = next(a for a in data["artifacts"] if a["format"] == "mermaid")["content"]
+    document = next(a for a in data["artifacts"] if a["type"] == "architecture")["content"]
+    for row in data["tables"]["components"]:
+        assert row["name"] in diagram, "the diagram is of the stack that lost"
+        assert row["name"] in document, "the export is of the stack that lost"
+
+
+async def test_a_rank_the_engine_never_offered_leaves_the_leader_alone(
+    client: AsyncClient, gemini: Any
+) -> None:
+    """D-06: the fallback for a malformed answer is the deterministic one."""
+    gemini(
+        {
+            "stack_synthesis": {**SYNTHESIS_REPLY, "recommended_rank": "3000"},
+            "roadmap": ROADMAP_REPLY,
+        }
+    )
+
+    response = await client.post("/api/v1/architect/recommend", json={})
+    data = response.json()["data"]
+
+    assert data["source"] == "hybrid"
+    assert 1 not in [row["rank"] for row in data["tables"]["alternatives"]]
+    assert data["tables"]["components"]
 
 
 async def test_one_failed_pass_still_leaves_the_other_on_the_page(
