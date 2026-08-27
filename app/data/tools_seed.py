@@ -18,7 +18,38 @@ from __future__ import annotations
 from datetime import date
 from typing import Any, NamedTuple
 
+from app.data.gpus_seed import GPUS, instance_slug
+
 REVIEWED = date(2026, 6, 29)
+
+
+def _fleet(provider: str) -> dict[str, Any]:
+    """The compute vendor's fleet, read off the GPU registry (M25).
+
+    Derived rather than typed, because both figures already exist as verified,
+    dated rows in `gpu_pricing` and a hand-copied second version of them is a
+    second thing to keep in step. A vendor that adds a larger card becomes
+    eligible for a fine-tuning workload on the next re-seed with no edit here.
+    """
+    instances = [gpu for gpu in GPUS if gpu.provider == provider]
+    if not instances:
+        return {}
+
+    # The instance the result page hands off to `gpu-cost` with. Biggest
+    # first, on-demand before spot: a recommendation that opens the calculator
+    # on the vendor's smallest card is answering a question nobody asked, and
+    # a spot rate is a number the user cannot rely on being there.
+    representative = max(
+        instances,
+        key=lambda gpu: (gpu.vram_gb * gpu.gpu_count, gpu.vram_gb, not gpu.spot),
+    )
+    return {
+        "max_vram_gb": max(gpu.vram_gb for gpu in instances),
+        "max_gpu_count": max(gpu.gpu_count for gpu in instances),
+        "gpu_slug": instance_slug(
+            representative.provider, representative.instance_name, spot=representative.spot
+        ),
+    }
 
 
 class ToolSeed(NamedTuple):
@@ -37,9 +68,18 @@ class ToolSeed(NamedTuple):
     docs_url: str | None = None
     status_reason: str | None = None
     alternatives: tuple[str, ...] = ()
+    #: Regions this tool can be operated in without the data leaving them
+    #: (M25). Empty on self-hostable software means unconstrained; empty on a
+    #: managed vendor means nothing is verified, and the architect eliminates
+    #: rather than passes. Filling one in is an editorial act with a source,
+    #: which is why the default is the honest empty rather than a guess.
+    residency: tuple[str, ...] = ()
 
 
 # Facts vocabulary, so the compare criteria can rely on the shape:
+#   max_vram_gb      int    — largest single-card VRAM the vendor rents (M25)
+#   max_gpu_count    int    — largest instance, in cards (M25)
+#   scale_to_zero    bool   — billing stops when nothing is running (M25)
 #   managed          bool   — a hosted offering exists
 #   ops_burden       1-5    — 1 is "someone else runs it"
 #   filtering        1-5    — metadata filter expressiveness
@@ -1581,30 +1621,6 @@ TOOLS: tuple[ToolSeed, ...] = (
         "https://modal.com/docs",
     ),
     ToolSeed(
-        "runpod",
-        "RunPod",
-        "deployment",
-        "Cheap GPU pods and serverless endpoints. Neocloud pricing.",
-        "stable",
-        68,
-        "proprietary",
-        False,
-        "usage-based",
-        ("managed", "gpu", "serverless", "cost-sensitive"),
-        ("inference", "fine-tuning", "cost-sensitive"),
-        {
-            "managed": True,
-            "ops_burden": 2,
-            "filtering": 1,
-            "hybrid_search": False,
-            "scale_ceiling": 3,
-            "ecosystem": 2,
-            "lock_in": 2,
-            "free_tier": False,
-        },
-        "https://docs.runpod.io",
-    ),
-    ToolSeed(
         "kubernetes",
         "Kubernetes",
         "deployment",
@@ -2021,3 +2037,260 @@ TOOLS: tuple[ToolSeed, ...] = (
         ("redis", "helicone"),
     ),
 )
+
+
+# -- compute - M25 -----------------------------------------------------------
+#
+# The vendor, not the instance. Hourly rates, GPU models and the regions those
+# rates were read in live in `gpu_pricing` under D-16; these rows carry only
+# the shape of the offering, and `_fleet` derives the two figures the architect
+# filters on from that same registry.
+#
+# `residency` is empty on every one of them, and that is a statement rather
+# than an omission: it means the catalog has no *verified* residency on file,
+# so a regional requirement excludes them and says so. Every one of these
+# vendors sells capacity in more than one geography; recording which, with a
+# source per claim, is editorial work this seed deliberately does not guess at.
+COMPUTE: tuple[ToolSeed, ...] = (
+    ToolSeed(
+        "aws-gpu",
+        "AWS EC2 (GPU)",
+        "gpu-cloud",
+        "P- and G-family GPU instances, in the account most enterprises already have.",
+        "recommended",
+        90,
+        "proprietary",
+        False,
+        "usage-based",
+        ("hyperscaler", "gpu", "reserved", "enterprise"),
+        ("self-hosting", "fine-tuning", "high-throughput"),
+        {
+            "managed": True,
+            "ops_burden": 4,
+            "filtering": 1,
+            "hybrid_search": False,
+            "scale_ceiling": 5,
+            "ecosystem": 5,
+            "lock_in": 4,
+            "free_tier": False,
+            "scale_to_zero": False,
+            **_fleet("aws"),
+        },
+        "https://aws.amazon.com/ec2/instance-types/p5/",
+    ),
+    ToolSeed(
+        "gcp-gpu",
+        "Google Cloud (GPU)",
+        "gpu-cloud",
+        "A2 and A3 instances, and the shortest path to TPUs if the workload suits them.",
+        "recommended",
+        88,
+        "proprietary",
+        False,
+        "usage-based",
+        ("hyperscaler", "gpu", "reserved"),
+        ("self-hosting", "fine-tuning", "batch"),
+        {
+            "managed": True,
+            "ops_burden": 4,
+            "filtering": 1,
+            "hybrid_search": False,
+            "scale_ceiling": 5,
+            "ecosystem": 4,
+            "lock_in": 4,
+            "free_tier": False,
+            "scale_to_zero": False,
+            **_fleet("gcp"),
+        },
+        "https://cloud.google.com/compute/docs/gpus",
+    ),
+    ToolSeed(
+        "azure-gpu",
+        "Azure (GPU)",
+        "gpu-cloud",
+        "ND and NC series. The default when the rest of the estate is already Microsoft.",
+        "stable",
+        84,
+        "proprietary",
+        False,
+        "usage-based",
+        ("hyperscaler", "gpu", "reserved", "enterprise"),
+        ("self-hosting", "fine-tuning"),
+        {
+            "managed": True,
+            "ops_burden": 4,
+            "filtering": 1,
+            "hybrid_search": False,
+            "scale_ceiling": 5,
+            "ecosystem": 4,
+            "lock_in": 4,
+            "free_tier": False,
+            "scale_to_zero": False,
+            **_fleet("azure"),
+        },
+        "https://learn.microsoft.com/azure/virtual-machines/sizes-gpu",
+    ),
+    ToolSeed(
+        "lambda-labs",
+        "Lambda",
+        "gpu-cloud",
+        "A GPU specialist. Cheaper per card than a hyperscaler, with far less around it.",
+        "recommended",
+        78,
+        "proprietary",
+        False,
+        "usage-based",
+        ("gpu", "specialist", "reserved"),
+        ("self-hosting", "fine-tuning", "cost-sensitive"),
+        {
+            "managed": True,
+            "ops_burden": 3,
+            "filtering": 1,
+            "hybrid_search": False,
+            "scale_ceiling": 4,
+            "ecosystem": 2,
+            "lock_in": 2,
+            "free_tier": False,
+            "scale_to_zero": False,
+            **_fleet("lambda"),
+        },
+        "https://lambda.ai/service/gpu-cloud",
+    ),
+    ToolSeed(
+        "runpod",
+        "RunPod",
+        "gpu-cloud",
+        "Per-second GPU rental with a serverless tier that stops billing between requests.",
+        "stable",
+        68,
+        "proprietary",
+        False,
+        "usage-based",
+        ("gpu", "community-cloud", "serverless", "spot"),
+        ("self-hosting", "cost-sensitive", "batch"),
+        {
+            "managed": True,
+            "ops_burden": 2,
+            "filtering": 1,
+            "hybrid_search": False,
+            "scale_ceiling": 3,
+            "ecosystem": 2,
+            "lock_in": 2,
+            "free_tier": False,
+            "scale_to_zero": True,
+            **_fleet("runpod"),
+        },
+        "https://docs.runpod.io/serverless/overview",
+    ),
+    ToolSeed(
+        "vast-ai",
+        "Vast.ai",
+        "gpu-cloud",
+        "A marketplace of spare GPUs. The cheapest hour, and the least guarantee.",
+        "stable",
+        62,
+        "proprietary",
+        False,
+        "usage-based",
+        ("gpu", "community-cloud", "marketplace", "spot"),
+        ("cost-sensitive", "batch"),
+        {
+            "managed": True,
+            "ops_burden": 4,
+            "filtering": 1,
+            "hybrid_search": False,
+            "scale_ceiling": 2,
+            "ecosystem": 1,
+            "lock_in": 1,
+            "free_tier": False,
+            "scale_to_zero": False,
+            **_fleet("vast"),
+        },
+        "https://docs.vast.ai/documentation/get-started/introduction",
+    ),
+)
+
+
+# -- guardrails - M25 --------------------------------------------------------
+#
+# All three are self-hostable open source, which is why each carries an empty
+# `residency` that means *unconstrained*: software the user runs themselves
+# runs wherever they run it. A managed moderation API belongs here too and is
+# not in this seed, because it would need verified residency before it could be
+# offered against a regional requirement.
+GUARDRAILS: tuple[ToolSeed, ...] = (
+    ToolSeed(
+        "guardrails-ai",
+        "Guardrails AI",
+        "guardrails",
+        "Validators over model input and output, with typed failure and re-ask.",
+        "recommended",
+        72,
+        "Apache-2.0",
+        True,
+        "free",
+        ("open-source", "python", "self-hostable", "validation"),
+        ("safety", "compliance", "agents"),
+        {
+            "managed": False,
+            "ops_burden": 2,
+            "filtering": 1,
+            "hybrid_search": False,
+            "scale_ceiling": 4,
+            "ecosystem": 3,
+            "lock_in": 1,
+            "free_tier": True,
+        },
+        "https://guardrailsai.com/docs",
+    ),
+    ToolSeed(
+        "nemo-guardrails",
+        "NVIDIA NeMo Guardrails",
+        "guardrails",
+        "Programmable dialogue rails - topic, safety and execution policy in Colang.",
+        "stable",
+        70,
+        "Apache-2.0",
+        True,
+        "free",
+        ("open-source", "python", "self-hostable", "policy"),
+        ("safety", "agents", "compliance"),
+        {
+            "managed": False,
+            "ops_burden": 3,
+            "filtering": 1,
+            "hybrid_search": False,
+            "scale_ceiling": 4,
+            "ecosystem": 3,
+            "lock_in": 2,
+            "free_tier": True,
+        },
+        "https://docs.nvidia.com/nemo/guardrails/",
+    ),
+    ToolSeed(
+        "llama-guard",
+        "Llama Guard",
+        "guardrails",
+        "An open-weight classifier for prompt and response safety. Runs on your own GPU.",
+        "stable",
+        66,
+        "Llama-Community",
+        True,
+        "free",
+        ("open-weights", "self-hostable", "classifier", "gpu"),
+        ("safety", "compliance"),
+        {
+            "managed": False,
+            "ops_burden": 3,
+            "filtering": 1,
+            "hybrid_search": False,
+            "scale_ceiling": 3,
+            "ecosystem": 2,
+            "lock_in": 1,
+            "free_tier": True,
+        },
+        "https://www.llama.com/docs/model-cards-and-prompt-formats/llama-guard-4/",
+    ),
+)
+
+TOOLS = TOOLS + COMPUTE + GUARDRAILS

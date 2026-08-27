@@ -69,6 +69,13 @@ class ToolCategory(str, enum.Enum):
     DEPLOYMENT = "deployment"
     DATABASE = "database"
     CACHE = "cache"
+    #: Where the weights run, as opposed to where the application runs (M25).
+    #: The vendor is the catalog row; its instances and their hourly rates stay
+    #: in `gpu_pricing`, because two tables about the same thing is how they
+    #: come to disagree.
+    GPU_CLOUD = "gpu-cloud"
+    #: What inspects input and output (M25).
+    GUARDRAILS = "guardrails"
 
 
 class ToolStatus(str, enum.Enum):
@@ -257,11 +264,9 @@ class GpuPricing(Base, TimestampMixin):
         the seeder uses - provider, instance, and the spot flag - so it
         survives a reseed the way `model_id` does.
         """
-        base = f"{self.provider}-{self.instance_name}".lower()
-        cleaned = "".join(char if char.isalnum() else "-" for char in base)
-        while "--" in cleaned:
-            cleaned = cleaned.replace("--", "-")
-        return f"{cleaned.strip('-')}-spot" if self.spot else cleaned.strip("-")
+        from app.data.gpus_seed import instance_slug
+
+        return instance_slug(self.provider, self.instance_name, spot=self.spot)
 
 
 class Tool(Base, TimestampMixin):
@@ -303,6 +308,16 @@ class Tool(Base, TimestampMixin):
 
     tags: Mapped[list[str]] = mapped_column(ARRAY(String(60)), nullable=False, default=list)
     use_cases: Mapped[list[str]] = mapped_column(ARRAY(String(60)), nullable=False, default=list)
+    #: Regions this tool can be operated in without the data leaving them (M25).
+    #:
+    #: Empty means two different things, and `self_hostable` is what tells them
+    #: apart: software the user runs themselves is unconstrained, because it
+    #: runs wherever they run it; a managed vendor with an empty array has no
+    #: verified residency on file and is eliminated by any regional
+    #: requirement rather than silently passing one. Failing closed is the only
+    #: safe direction here — a wrong `eu` claim is a compliance problem the
+    #: product caused.
+    residency: Mapped[list[str]] = mapped_column(ARRAY(String(8)), nullable=False, default=list)
     # Free-form facts the comparison engine scores against — see
     # `app/data/compare_criteria.py`. Kept as JSONB so a new criterion is a data
     # change, not a migration.
@@ -315,6 +330,7 @@ class Tool(Base, TimestampMixin):
         Index("ix_tool_catalog_category_status", "category", "status"),
         Index("ix_tool_catalog_tags", "tags", postgresql_using="gin"),
         Index("ix_tool_catalog_use_cases", "use_cases", postgresql_using="gin"),
+        Index("ix_tool_catalog_residency", "residency", postgresql_using="gin"),
         CheckConstraint(
             "maturity_score BETWEEN 0 AND 100", name="maturity_score_between_0_and_100"
         ),

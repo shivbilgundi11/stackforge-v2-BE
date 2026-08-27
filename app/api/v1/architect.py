@@ -50,6 +50,10 @@ def _requirements(payload: RecommendIn) -> Requirements:
         sensitivity=payload.sensitivity,
         deployment=payload.deployment,
         capabilities=tuple(payload.capabilities),
+        model_hosting=payload.model_hosting,
+        workload=payload.workload,
+        traffic=payload.traffic,
+        residency=payload.residency,
     )
 
 
@@ -114,6 +118,12 @@ async def run_recommend_stack(
         summary = stack_architect_service.rule_summary(winner, requirements)
         others = [candidate for candidate in ranked_stacks if candidate.rank != winner.rank]
 
+        # The compute vendor's representative instance, so the result page can
+        # open `gpu-cost` on a real machine rather than on its own defaults
+        # (M25). Absent on the stacks that have no compute layer, which is
+        # most of them, and the handoff hides itself accordingly.
+        compute = next((tool for tool in winner.components if tool.category == "gpu-cloud"), None)
+
         # What the exported document is built from, kept so the roadmap pass
         # can rebuild it with the steps in place. Re-rendering the whole file
         # is what keeps the download and the screen agreeing; patching the
@@ -138,6 +148,11 @@ async def run_recommend_stack(
                 ),
                 "deprecated_components": len(winner.deprecated),
                 "summary": summary,
+                **(
+                    {"compute_gpu": str((compute.facts or {}).get("gpu_slug", ""))}
+                    if compute is not None and (compute.facts or {}).get("gpu_slug")
+                    else {}
+                ),
             },
             tables={
                 "components": rows,

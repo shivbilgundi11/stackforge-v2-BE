@@ -54,6 +54,13 @@ ROLES: Final[tuple[Role, ...]] = (
     Role("orchestration", "Orchestration", "orchestration", False, "Durable background work."),
     Role("observability", "Observability", "observability", False, "Traces, evals, and cost."),
     Role("deployment", "Deployment", "deployment", True, "Where it runs."),
+    # M25. Both optional, and that is the whole mechanism: `component_rows`
+    # skips a role nothing filled, so a stack calling an API drops both rows
+    # without a conditional anywhere in the renderer. Most of this audience
+    # integrates a third-party API, and growing the common answer by two rows
+    # to serve the minority who self-host would make it worse for everyone.
+    Role("compute", "Compute", "gpu-cloud", False, "Where the weights run."),
+    Role("guardrails", "Guardrails", "guardrails", False, "Input and output inspection."),
 )
 
 AGENT_USE_CASES: Final = frozenset({"agents", "automation", "coding"})
@@ -73,6 +80,35 @@ class Requirements(NamedTuple):
     sensitivity: str
     deployment: str
     capabilities: tuple[str, ...]
+    # M25. Defaulted to the answers that make both new roles disappear, so an
+    # untouched form produces exactly the pre-M25 recommendation — which is
+    # what keeps every saved stack and every M15 fixture valid.
+    model_hosting: str = "api"
+    workload: str = "inference"
+    traffic: str = "steady"
+    residency: str = "any"
+
+
+#: The catalog's own word for a provider serving open weights. Used rather
+#: than a new fact because three vendors already carry it.
+OPEN_WEIGHTS_TAG: Final = "open-weights"
+
+#: Fine-tuning and training need the machine for longer and at a different
+#: shape; inference alone is the case the compute layer is optional for.
+TRAINING_WORKLOADS: Final = frozenset({"fine-tuning", "training"})
+
+#: What a fine-tune needs to hold on one card, in GB. Below this the vendor is
+#: offering inference hardware, whatever it calls the tier.
+FINE_TUNING_VRAM_GB: Final = 80
+
+#: A training run wants a multi-GPU instance. Both figures are derived from the
+#: GPU registry at seed time rather than typed per vendor, so a provider whose
+#: fleet changes is one re-seed away from a correct answer.
+TRAINING_GPU_COUNT: Final = 8
+
+#: The two roles M25 adds. Neither belongs in every stack, so each is offered
+#: only when the intake says it applies — see `_offers_role`.
+OPTIONAL_M25_CATEGORIES: Final = frozenset({"gpu-cloud", "guardrails"})
 
 
 class Elimination(NamedTuple):
@@ -80,6 +116,59 @@ class Elimination(NamedTuple):
     name: str
     constraint: str
     reason: str
+
+
+def _offers_role(category: str, requirements: Requirements) -> bool:
+    """Whether a stack shaped like this has the role at all (M25).
+
+    Not an elimination, and deliberately not recorded as one. The exclusions
+    table exists to explain why a tool the user *expected* is missing; a user
+    who said they are calling an API did not expect six GPU vendors, and
+    listing all six as "excluded" would bury the constraints that actually bit
+    under noise the user already knew about.
+    """
+    if category == "gpu-cloud":
+        # Only running the weights yourself puts a machine in the stack.
+        # `managed-open-weights` is someone else's machine, and recommending a
+        # GPU to a user who will never rent one is the layer bloat this module
+        # exists to avoid.
+        return requirements.model_hosting == "self-hosted"
+    if category == "guardrails":
+        # Sensitive data or an agent holding tools. Everything else gets the
+        # eight roles it got before this module existed.
+        return (
+            requirements.sensitivity in {"confidential", "restricted", "regulated"}
+            or requirements.use_case in AGENT_USE_CASES
+        )
+    return True
+
+
+def _residency_reason(tool: ToolOut, region: str) -> str | None:
+    """Why this region rules the tool out, or `None` if it does not.
+
+    Empty `residency` is read two ways, and `self_hostable` is what separates
+    them: software the user runs themselves is unconstrained, because it runs
+    wherever they run it. A managed vendor with an empty array has no verified
+    residency on file, and the answer to "we do not know" is exclusion rather
+    than a silent pass — a stack that quietly kept a US-only vendor in an EU
+    answer is the one failure this constraint exists to prevent.
+    """
+    if region == "any":
+        return None
+    if tool.self_hostable:
+        return None
+    if not tool.residency:
+        return (
+            f"{tool.name} is managed and the catalog carries no verified "
+            f"residency for it, so it cannot be offered against a {region.upper()} "
+            f"requirement."
+        )
+    if region not in tool.residency:
+        return (
+            f"{tool.name} is not operable in {region.upper()} — it is available in "
+            f"{', '.join(sorted(code.upper() for code in tool.residency))}."
+        )
+    return None
 
 
 def eliminate(
@@ -100,6 +189,13 @@ def eliminate(
 
     for tool in catalog:
         facts = tool.facts or {}
+
+        # M25's two roles, before anything else: a role this stack does not
+        # have cannot have its components eliminated for a reason.
+        if tool.category in OPTIONAL_M25_CATEGORIES and not _offers_role(
+            tool.category, requirements
+        ):
+            continue
 
         if tool.status not in RECOMMENDABLE:
             removed.append(
@@ -124,7 +220,18 @@ def eliminate(
             )
             continue
 
-        if requirements.deployment == "self-hosted" and not tool.self_hostable:
+        # `gpu-cloud` is exempt, and the exemption is the point of the
+        # category: renting a machine and running vLLM on it *is* self-hosting.
+        # `self_hostable` asks whether software can run on infrastructure the
+        # user controls, which is not a question about a vendor who rents the
+        # infrastructure. Sensitivity still applies below — someone else's
+        # datacentre is still someone else's — and that is the constraint that
+        # should remove a compute layer, not this one.
+        if (
+            requirements.deployment == "self-hosted"
+            and not tool.self_hostable
+            and tool.category != "gpu-cloud"
+        ):
             removed.append(
                 Elimination(
                     tool.slug, tool.name, "deployment", f"{tool.name} has no self-hosted option."
@@ -195,6 +302,91 @@ def eliminate(
                 )
             )
             continue
+
+        # ── M25 ──────────────────────────────────────────────────────────────
+        #
+        # Hosting your own weights and calling someone's API are different
+        # stacks, and the LLM row is where that shows. Without this a
+        # self-hosted answer recommends a GPU cluster next to OpenAI, which
+        # reads as an engine that did not understand the question.
+        if tool.category == "llm-provider":
+            if requirements.model_hosting == "self-hosted" and not tool.self_hostable:
+                removed.append(
+                    Elimination(
+                        tool.slug,
+                        tool.name,
+                        "model_hosting",
+                        f"{tool.name} is an API. You said the weights run on your own "
+                        f"hardware, which needs a runtime you can deploy.",
+                    )
+                )
+                continue
+
+            # Both halves of the answer, not either: Ollama serves open
+            # weights and Anthropic is someone else's machine, and neither one
+            # on its own is what "open weights, run by someone else" asked for.
+            if requirements.model_hosting == "managed-open-weights" and not (
+                OPEN_WEIGHTS_TAG in tool.tags and facts.get("managed", False)
+            ):
+                removed.append(
+                    Elimination(
+                        tool.slug,
+                        tool.name,
+                        "model_hosting",
+                        f"{tool.name} is not open weights served by someone else — "
+                        f"which is the shape you asked for.",
+                    )
+                )
+                continue
+
+        # Residency is checked against every tool, not just the compute layer:
+        # a vector store holding the embeddings is as much a data-residency
+        # question as the machine serving the model.
+        residency_reason = _residency_reason(tool, requirements.residency)
+        if residency_reason is not None:
+            removed.append(Elimination(tool.slug, tool.name, "residency", residency_reason))
+            continue
+
+        if tool.category == "gpu-cloud":
+            vram = float(facts.get("max_vram_gb", 0))
+            gpus = float(facts.get("max_gpu_count", 0))
+
+            if requirements.workload in TRAINING_WORKLOADS and vram < FINE_TUNING_VRAM_GB:
+                removed.append(
+                    Elimination(
+                        tool.slug,
+                        tool.name,
+                        "workload",
+                        f"{tool.name} tops out at {vram:,.0f}GB on one card, and a "
+                        f"{requirements.workload} run needs at least "
+                        f"{FINE_TUNING_VRAM_GB}GB.",
+                    )
+                )
+                continue
+
+            if requirements.workload == "training" and gpus < TRAINING_GPU_COUNT:
+                removed.append(
+                    Elimination(
+                        tool.slug,
+                        tool.name,
+                        "workload",
+                        f"{tool.name}'s largest instance is {gpus:,.0f} GPUs. Training "
+                        f"from scratch wants at least {TRAINING_GPU_COUNT} in one box.",
+                    )
+                )
+                continue
+
+            if requirements.traffic == "spiky" and not facts.get("scale_to_zero", False):
+                removed.append(
+                    Elimination(
+                        tool.slug,
+                        tool.name,
+                        "traffic",
+                        f"{tool.name} bills for a machine that is running, and spiky "
+                        f"traffic spends most of the month paying for an idle GPU.",
+                    )
+                )
+                continue
 
         survivors.append(tool)
 

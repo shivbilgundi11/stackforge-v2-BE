@@ -13,13 +13,23 @@ TeamSkill = Literal["beginner", "intermediate", "advanced"]
 Sensitivity = Literal["public", "internal", "confidential", "restricted", "regulated"]
 Deployment = Literal["any", "managed", "self-hosted", "hybrid"]
 
+# M25. Four answers about the model's own infrastructure, as opposed to the
+# application's. Every default is the one that makes the compute layer
+# disappear, so an untouched form returns the pre-M25 recommendation.
+ModelHosting = Literal["api", "managed-open-weights", "self-hosted"]
+Workload = Literal["inference", "fine-tuning", "training"]
+Traffic = Literal["steady", "spiky", "batch"]
+Residency = Literal["any", "eu", "in", "us"]
+
 
 class RecommendIn(BaseModel):
-    """The eight inputs from `PRD.md` §8.1.
+    """The eight inputs from `PRD.md` §8.1, plus M25's four.
 
-    All eight have defaults so the form is runnable from the first screen —
+    All of them have defaults so the form is runnable from the first screen —
     an anonymous visitor gets a real recommendation without filling anything
-    in, which is the product's strongest demo.
+    in, which is the product's strongest demo. M25's four default to the
+    answers that leave the recommendation exactly as it was before that
+    module, which is what keeps every saved stack valid.
     """
 
     use_case: UseCase = "rag"
@@ -30,6 +40,11 @@ class RecommendIn(BaseModel):
     sensitivity: Sensitivity = "internal"
     deployment: Deployment = "any"
     capabilities: list[str] = Field(default_factory=list, max_length=12)
+
+    model_hosting: ModelHosting = "api"
+    workload: Workload = "inference"
+    traffic: Traffic = "steady"
+    residency: Residency = "any"
 
 
 class ScoreIn(BaseModel):

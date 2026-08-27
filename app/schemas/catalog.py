@@ -106,6 +106,9 @@ class ToolOut(BaseModel):
     repo_url: str | None = None
     tags: list[str] = Field(default_factory=list)
     use_cases: list[str] = Field(default_factory=list)
+    #: See `Tool.residency` — empty is "unconstrained" on self-hostable
+    #: software and "not on file" on anything managed (M25).
+    residency: list[str] = Field(default_factory=list)
     facts: dict[str, Any] = Field(default_factory=dict)
     last_reviewed_at: datetime
 

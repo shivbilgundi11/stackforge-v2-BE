@@ -46,6 +46,22 @@ class GpuSeed(NamedTuple):
     verified: date = VERIFIED_LIVE
 
 
+def instance_slug(provider: str, instance_name: str, *, spot: bool = False) -> str:
+    """The stable, shareable identifier for a priced instance.
+
+    Lives here rather than only on the model because two callers need it and
+    neither should re-derive it: `GpuPricing.slug` serves it to the API, and
+    the M25 compute rows carry one so a recommendation can hand off into
+    `gpu-cost` with the instance already chosen. Two copies of a slug rule is
+    two chances for a link to point at nothing.
+    """
+    base = f"{provider}-{instance_name}".lower()
+    cleaned = "".join(char if char.isalnum() else "-" for char in base)
+    while "--" in cleaned:
+        cleaned = cleaned.replace("--", "-")
+    return f"{cleaned.strip('-')}-spot" if spot else cleaned.strip("-")
+
+
 GPUS: tuple[GpuSeed, ...] = (
     # ---- AWS --------------------------------------------------------------
     # On-demand read from the pricing feed the EC2 pricing page itself calls,

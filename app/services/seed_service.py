@@ -311,6 +311,13 @@ async def _seed_tools(db: AsyncSession, report: SeedReport, *, refresh: bool) ->
         if seed.status in ("deprecated", "not_for_production") and not seed.status_reason:
             raise ValueError(f"Tool '{seed.slug}' is buried but has no status_reason.")
 
+        # M25: a compute row with no fleet figures cannot be filtered by
+        # workload, so it would survive a training requirement it cannot meet.
+        # Both values are derived from the GPU registry, so a missing one means
+        # the vendor has no priced instances rather than an unfilled field.
+        if seed.category == "gpu-cloud" and not seed.facts.get("max_vram_gb"):
+            raise ValueError(f"Compute vendor '{seed.slug}' has no instances in gpu_pricing.")
+
         current = existing.get(seed.slug)
         values = {
             "name": seed.name,
@@ -326,6 +333,7 @@ async def _seed_tools(db: AsyncSession, report: SeedReport, *, refresh: bool) ->
             "docs_url": seed.docs_url,
             "tags": list(seed.tags),
             "use_cases": list(seed.use_cases),
+            "residency": list(seed.residency),
             "facts": dict(seed.facts),
             "last_reviewed_at": reviewed,
             "reviewed_by": "editorial",
