@@ -12,6 +12,7 @@ a bracket in it otherwise produces a diagram that silently fails to render.
 
 from __future__ import annotations
 
+from itertools import pairwise
 from typing import Final
 
 from app.schemas.catalog import ToolOut
@@ -20,16 +21,29 @@ from app.services.stack_architect_service import ROLES, Requirements, _role_cate
 #: Left-to-right request path, then the supporting roles hanging off it. Drawn
 #: as the request actually flows rather than as a category list, because the
 #: question a reader brings to an architecture diagram is "what calls what".
-FLOW: Final[tuple[tuple[str, str], ...]] = (
-    ("client", "framework"),
-    ("framework", "llm"),
+#:
+#: Each entry is a chain rather than a single edge, and a role nothing filled
+#: drops out so its neighbours join directly. That is what lets guardrails sit
+#: *between* the framework and the model — which is what guardrails does,
+#: inspecting what goes in and what comes back — without costing the stacks
+#: that have none their `framework --> llm` edge.
+FLOW: Final[tuple[tuple[str, ...], ...]] = (
+    ("client", "framework", "guardrails", "llm"),
     ("framework", "vector_db"),
     ("framework", "database"),
     ("framework", "cache"),
     ("framework", "orchestration"),
 )
 
-SUPPORTING: Final[tuple[str, ...]] = ("observability", "deployment")
+#: Supporting role, and the node it hangs off. Compute anchors to the model
+#: rather than to the framework: it is where the weights run, and hanging it
+#: off the orchestration glue would put it in the wrong place for the one
+#: reader who asked for it.
+SUPPORTING: Final[tuple[tuple[str, str], ...]] = (
+    ("observability", "framework"),
+    ("deployment", "framework"),
+    ("compute", "llm"),
+)
 
 
 def _label(text: str) -> str:
@@ -52,15 +66,16 @@ def mermaid(components: list[ToolOut], requirements: Requirements) -> str:
             continue
         lines.append(f'    {role.key}["{_label(role.label)}<br/>{_label(tool.name)}"]')
 
-    for source, target in FLOW:
-        if (source == "client" or source in present) and target in present:
+    for chain in FLOW:
+        drawn = [key for key in chain if key == "client" or key in present]
+        for source, target in pairwise(drawn):
             lines.append(f"    {source} --> {target}")
 
-    # Observability and deployment wrap the stack rather than sit in the
-    # request path; a dotted edge says that without implying a call.
-    for role_key in SUPPORTING:
-        if role_key in present and "framework" in present:
-            lines.append(f"    framework -.-> {role_key}")
+    # These wrap the stack rather than sit in the request path; a dotted edge
+    # says that without implying a call.
+    for role_key, anchor in SUPPORTING:
+        if role_key in present and anchor in present:
+            lines.append(f"    {anchor} -.-> {role_key}")
 
     return "\n".join(lines)
 

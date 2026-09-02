@@ -43,6 +43,21 @@ def _excluded_by(data: dict[str, Any], constraint: str) -> set[str]:
     }
 
 
+def _diagram(data: dict[str, Any]) -> tuple[set[str], list[tuple[str, str]]]:
+    """The diagram's declared nodes and its edges, solid and dotted alike.
+
+    `-->` is three characters and `-.->` is four, so a class matching one
+    character between the dashes silently sees only the dotted edges — which
+    is every supporting role and no part of the request path.
+    """
+    source = next(a for a in data["artifacts"] if a["format"] == "mermaid")["content"]
+    assert source.startswith("graph LR")
+    return (
+        set(re.findall(r"^\s{4}(\w+)\[", source, re.M)),
+        re.findall(r"^\s{4}(\w+) -\.?-> (\w+)$", source, re.M),
+    )
+
+
 # ── the headline ─────────────────────────────────────────────────────────────
 
 
@@ -55,12 +70,70 @@ async def test_a_recommendation_returns_a_scored_stack_with_a_diagram(
     assert len(data["tables"]["components"]) >= 4
     assert len(data["tables"]["score_breakdown"]) == 10
 
-    diagram = next(a for a in data["artifacts"] if a["format"] == "mermaid")["content"]
-    assert diagram.startswith("graph LR")
-    declared = set(re.findall(r"^\s{4}(\w+)\[", diagram, re.M))
-    edges = re.findall(r"^\s{4}(\w+) -[.-]-> (\w+)$", diagram, re.M)
+    declared, edges = _diagram(data)
     assert edges
     assert all(source in declared and target in declared for source, target in edges)
+
+
+async def test_every_node_in_the_diagram_is_connected(client: AsyncClient) -> None:
+    """No orphans, on the shape that declares the most nodes.
+
+    The diagram is rendered now rather than shown as source, and a role that
+    declares a node but draws no edge is a box floating beside the picture.
+    Self-hosting plus an agent use case is what turns on both of M25's
+    optional roles at once — `restricted` also turns guardrails on, but it
+    eliminates every GPU vendor on the way, so it never declares the compute
+    node this is here to catch.
+    """
+    data = await _recommend(client, model_hosting="self-hosted", use_case="agents")
+
+    declared, edges = _diagram(data)
+    connected = {node for edge in edges for node in edge}
+
+    assert {"compute", "guardrails"} <= declared
+    assert declared - connected == set()
+    assert connected - declared == set()
+
+
+async def test_compute_hangs_off_the_model_not_the_framework(
+    client: AsyncClient,
+) -> None:
+    """Where the weights run belongs to the model, not the orchestration glue."""
+    data = await _recommend(client, model_hosting="self-hosted")
+
+    _, edges = _diagram(data)
+
+    assert ("llm", "compute") in edges
+    assert ("framework", "compute") not in edges
+
+
+async def test_guardrails_sits_between_the_framework_and_the_model(
+    client: AsyncClient,
+) -> None:
+    """In the request path, not off to one side — it inspects the traffic.
+
+    An agent use case turns guardrails on without self-hosting, which is the
+    common way this role appears.
+    """
+    data = await _recommend(client, use_case="agents")
+
+    _, edges = _diagram(data)
+
+    assert ("framework", "guardrails") in edges
+    assert ("guardrails", "llm") in edges
+    assert ("framework", "llm") not in edges
+
+
+async def test_a_stack_without_guardrails_keeps_its_framework_to_model_edge(
+    client: AsyncClient,
+) -> None:
+    """The chain closes over the role it dropped."""
+    data = await _recommend(client)
+
+    declared, edges = _diagram(data)
+
+    assert "guardrails" not in declared
+    assert ("framework", "llm") in edges
 
 
 async def test_the_score_breakdown_sums_to_the_headline(client: AsyncClient) -> None:
