@@ -16,6 +16,7 @@ from itertools import pairwise
 from typing import Final
 
 from app.schemas.catalog import ToolOut
+from app.services import diagram_theme
 from app.services.stack_architect_service import ROLES, Requirements, _role_category
 
 #: Left-to-right request path, then the supporting roles hanging off it. Drawn
@@ -77,7 +78,14 @@ def mermaid(components: list[ToolOut], requirements: Requirements) -> str:
         if role_key in present and anchor in present:
             lines.append(f"    {anchor} -.-> {role_key}")
 
-    return "\n".join(lines)
+    # Colour by role, and a brand mark per box. `client` is the caller rather
+    # than a component, so it has a role and no tool — which is exactly the
+    # case `decorate` leaves without a mark.
+    roles = {"client": "client", **{key: key for key in present}}
+    tools: dict[str, str | None] = {"client": None}
+    tools.update({key: tool.slug for key, tool in present.items()})
+
+    return "\n".join(diagram_theme.decorate(lines, roles=roles, tools=tools))
 
 
 def document(

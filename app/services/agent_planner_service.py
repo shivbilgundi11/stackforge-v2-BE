@@ -22,6 +22,7 @@ from typing import Any, Final, NamedTuple
 
 from app.schemas.catalog import ModelOut, ToolOut
 from app.schemas.tools import Artifact, ToolOutput, ToolWarning
+from app.services import diagram_theme
 from app.services.cost_service import DAYS_PER_MONTH, THOUSAND
 
 CENTS: Final = Decimal("0.01")
@@ -652,13 +653,20 @@ def _mermaid(nodes: list[Node], edges: list[Edge]) -> str:
     produces a diagram that silently fails to parse in the renderer.
     """
     lines = ["graph TD"]
+    roles: dict[str, str] = {}
     for node in nodes:
         label = _label(node.title)
         role = _label(node.role)
         lines.append(f'    {node.id}["{label}<br/><small>{role}</small>"]')
+        roles[node.id] = node.role
     for edge in edges:
         lines.append(f"    {edge.source} --> {edge.target}")
-    return "\n".join(lines)
+
+    # Coloured, but never branded: a node here is a unit of work this module
+    # invented, not a catalog entry, so there is nothing to look a logo up by.
+    # The colour is what separates the parts that decide from the parts that
+    # do, which is the question a reader brings to a topology.
+    return "\n".join(diagram_theme.decorate(lines, roles=roles, tools=dict.fromkeys(roles)))
 
 
 def _label(text: str) -> str:

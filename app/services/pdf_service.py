@@ -59,10 +59,16 @@ from reportlab.platypus import (
 from app.core.config import settings
 from app.core.database import utcnow
 from app.core.logging import get_logger
+from app.services import diagram_render
 
 logger = get_logger("pdf")
 
 Backend = Literal["auto", "chromium", "reportlab"]
+
+#: How long the diagram pass gets. Generous — a stack diagram is eight boxes
+#: and renders in well under a second — but bounded, because the alternative to
+#: a bound is an export that never returns.
+DIAGRAM_TIMEOUT_MS: Final = 15_000
 
 #: Forge Console, as close as print gets. The palette is the light theme —
 #: a PDF is printed or read on white, and a dark document is a document that
@@ -130,6 +136,20 @@ def _playwright_available() -> bool:
 # ── shared: markdown to HTML ────────────────────────────────────────────────
 
 
+#: What `fenced_code` makes of a ```mermaid block. Rewritten to the shape the
+#: renderer looks for, and unescaped on the way — a diagram's labels carry
+#: `<br/>` and quotes, which the Markdown pass turns into entities that Mermaid
+#: would then try to parse as part of a node name.
+_MERMAID_BLOCK = re.compile(r'<pre><code class="language-mermaid">(.*?)</code></pre>', re.DOTALL)
+
+
+def _mermaid_blocks(body: str) -> str:
+    return _MERMAID_BLOCK.sub(
+        lambda match: f'<pre class="mermaid">{html.unescape(match.group(1))}</pre>',
+        body,
+    )
+
+
 def to_html(document: Document) -> str:
     """The styled HTML both the Chromium backend and a browser preview use."""
     import markdown as markdown_lib
@@ -139,6 +159,10 @@ def to_html(document: Document) -> str:
         extensions=["tables", "fenced_code", "sane_lists", "attr_list"],
         output_format="html",
     )
+    # Only Chromium can turn these into a picture; ReportLab never sees this
+    # function. Marking them here rather than in the backend keeps the one
+    # place that knows Markdown in charge of reading it.
+    body = _mermaid_blocks(body)
     stamped = document.stamped_at.strftime("%d %B %Y")
     footer = html.escape(document.share_url or "stackforge.dev")
 
@@ -202,6 +226,18 @@ def to_html(document: Document) -> str:
     page-break-inside: avoid;
   }}
   code {{ font-family: "Cascadia Mono", Consolas, monospace; font-size: 9pt; }}
+  /* Until the renderer replaces it, a diagram is still its source — so it is
+     styled as one. If Mermaid is unavailable the block simply stays. */
+  pre.mermaid {{ white-space: pre; }}
+  figure.diagram {{
+    margin: 10pt 0 14pt;
+    padding: 8pt;
+    border: 1px solid {RULE};
+    border-radius: 3pt;
+    text-align: center;
+    page-break-inside: avoid;
+  }}
+  figure.diagram svg {{ max-width: 100%; height: auto; }}
   hr {{ border: 0; border-top: 1px solid {RULE}; margin: 14pt 0; }}
   blockquote {{
     margin: 8pt 0;
@@ -243,6 +279,7 @@ def _render_chromium(document: Document) -> bytes:
             # nothing here loads a remote resource, so there is no network to
             # wait for and no file to clean up on a crash.
             page.set_content(markup, wait_until="load")
+            _draw_diagrams(page)
             rendered: bytes = page.pdf(
                 format="A4",
                 print_background=True,
@@ -259,6 +296,29 @@ def _render_chromium(document: Document) -> bytes:
             return rendered
         finally:
             browser.close()
+
+
+def _draw_diagrams(page: Any) -> None:
+    """Turn the diagram sources in the page into pictures, or leave them.
+
+    Everything here is best-effort by construction. The bundle is added from
+    disk rather than a URL, so there is still no network in an export; if it is
+    missing, or Mermaid throws, or the render outlives its budget, the page
+    keeps the fenced source it already had and the PDF is the one this backend
+    produced last week.
+    """
+    if not diagram_render.available():
+        return
+
+    try:
+        page.add_script_tag(path=str(diagram_render.MERMAID_JS))
+        page.add_script_tag(content=diagram_render.script())
+        # A budget rather than an open wait. A diagram that cannot finish must
+        # cost the picture, not the export.
+        drawn = page.evaluate("window.__sfDiagramsReady", timeout=DIAGRAM_TIMEOUT_MS)
+        logger.info("pdf.diagrams_drawn", count=drawn)
+    except Exception as exc:  # any failure degrades to the fenced source
+        logger.warning("pdf.diagrams_failed", error=str(exc))
 
 
 # ── reportlab ───────────────────────────────────────────────────────────────

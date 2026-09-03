@@ -161,6 +161,40 @@ Without it, exports still work — they just look like a generated report rather
 than a designed one. Pin `PDF_BACKEND=chromium` in any environment where the
 downgrade must be an error rather than a log line.
 
+## Diagrams
+
+Every generated diagram carries two things beyond its boxes and arrows, and
+both are in the Mermaid source rather than bolted on by one renderer:
+
+- **Colour by role**, as a `classDef` block. Ordinary Mermaid, so the `.mmd`
+  someone downloads renders in colour on GitHub or in a VS Code preview with no
+  help from us. The colour is the *role*, so the model is violet and the stores
+  are blue whichever tool filled the slot.
+- **Brand marks**, as `%% brand:<node>:<icon>:<hex>` comments. Comments are
+  ignored by every renderer, so the artefact stays portable; a renderer that
+  understands them draws the logo. The logo is not a node image because an
+  `img` shape needs a data URI in the source, and five kilobytes of base64 in
+  the middle of a file people read and edit is not a trade worth making.
+
+The catalog-slug-to-icon map is `app/data/brands.py`. It covers 47 of 88 tools
+— the set these are drawn from delists a brand on trademark request, and has
+done so for most of the large vendors — and an unmatched tool gets a monogram
+in the role's colour rather than a gap.
+
+`app/data/brand_marks.json` holds the paths, generated from `simple-icons` and
+written to both repositories at once:
+
+```bash
+cd ../frontend && npm install --no-save simple-icons && npm run brand:marks
+```
+
+The Chromium backend renders diagrams into the PDF; ReportLab prints the source
+it was drawn from, because it has no browser. That needs the Mermaid bundle
+vendored at `app/static/mermaid.min.js` — committed rather than fetched,
+because an export must not depend on a CDN being reachable. `MERMAID_VERSION`
+records the build; the web app resolves its own copy from `package.json`, and
+the two should be bumped together or the same diagram renders two ways.
+
 ## Conventions
 
 - **Routers contain no formulas.** Parse, authorise, call one service, return.

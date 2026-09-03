@@ -19,6 +19,7 @@ from typing import Any, Final
 
 from app.schemas.catalog import ModelOut, ToolOut
 from app.schemas.tools import Artifact, ToolOutput, ToolWarning
+from app.services import diagram_theme
 
 # Cross-encoder reranking is a second model pass over every candidate. It buys
 # real precision and costs real milliseconds, so it comes out below this.
@@ -222,7 +223,7 @@ def design(
         },
     ]
 
-    diagram = _mermaid(components)
+    diagram = _mermaid(components, framework=framework, store=store)
     summary = _summary(
         use_case=use_case,
         sensitivity=sensitivity,
@@ -270,22 +271,42 @@ def _store_reason(store: ToolOut | None, *, self_host_only: bool, scale: str) ->
     return f"{store.name} is the lowest-operations option that fits this corpus."
 
 
-def _mermaid(components: list[dict[str, Any]]) -> str:
+def _mermaid(
+    components: list[dict[str, Any]],
+    *,
+    framework: ToolOut | None = None,
+    store: ToolOut | None = None,
+) -> str:
     """A left-to-right pipeline.
 
     Node ids are the stage names, which are a fixed vocabulary, so nothing
     user-supplied reaches an identifier position. Labels are quoted and have
     quotes stripped - a tool name with a bracket in it otherwise produces a
     diagram that silently fails to parse in the renderer.
+
+    `framework` and `store` are passed rather than read back out of
+    `components`, because only two of the seven stages are a catalog entry at
+    all - a splitter is a strategy and an embedder is a class of model. The
+    rest are coloured by stage and get a monogram, which is the honest picture:
+    there is no logo for "recursive character".
     """
     lines = ["graph LR"]
+    roles: dict[str, str] = {}
+    slugs = {
+        "loader": framework.slug if framework else None,
+        "store": store.slug if store else None,
+    }
+
     for index, component in enumerate(components):
         stage = component["stage"]
         label = str(component["choice"]).replace('"', "").replace("\n", " ")
         lines.append(f'    {stage}["{stage.title()}<br/>{label}"]')
         if index:
             lines.append(f"    {components[index - 1]['stage']} --> {stage}")
-    return "\n".join(lines)
+        roles[stage] = stage
+
+    tools: dict[str, str | None] = {stage: slugs.get(stage) for stage in roles}
+    return "\n".join(diagram_theme.decorate(lines, roles=roles, tools=tools))
 
 
 def _summary(
