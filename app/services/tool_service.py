@@ -123,7 +123,6 @@ async def run_tool(
         tool_slug=slug,
         workflow=workflow,
         user_id=identity.user.id if identity.user else None,
-        anonymous_session_id=None if identity.user else identity.anonymous_id,
         input=payload.model_dump(mode="json"),
         # The full wire shape, not the bare `ToolOutput`. Provenance is
         # attached here rather than by `compute`, so storing the inner object
@@ -147,7 +146,6 @@ async def run_tool(
         run_id=run.id,
         duration_ms=duration_ms,
         source=source.value,
-        authenticated=identity.is_authenticated,
     )
 
     return wire
@@ -240,13 +238,12 @@ async def recent_runs(
     workflow: str | None = None,
     limit: int = 10,
 ) -> list[ToolRun]:
-    stmt = select(ToolRun).order_by(ToolRun.created_at.desc()).limit(limit)
-    if identity.user:
-        stmt = stmt.where(ToolRun.user_id == identity.user.id)
-    elif identity.anonymous_id:
-        stmt = stmt.where(ToolRun.anonymous_session_id == identity.anonymous_id)
-    else:
-        return []
+    stmt = (
+        select(ToolRun)
+        .where(ToolRun.user_id == identity.user.id)
+        .order_by(ToolRun.created_at.desc())
+        .limit(limit)
+    )
     if workflow:
         stmt = stmt.where(ToolRun.workflow == workflow)
     return list((await db.execute(stmt)).scalars().all())
@@ -261,28 +258,6 @@ async def get_run(db: AsyncSession, run_id: str, identity: Identity) -> ToolRun 
     run = await db.get(ToolRun, run_id)
     if run is None:
         return None
-    if identity.user and run.user_id == identity.user.id:
-        return run
-    if identity.anonymous_id and run.anonymous_session_id == identity.anonymous_id:
+    if run.user_id == identity.user.id:
         return run
     return None
-
-
-async def claim_anonymous_runs(db: AsyncSession, *, anonymous_id: str, user_id: str) -> int:
-    """Move an anonymous session's runs onto the account it just created.
-
-    Someone who ran four calculations before signing up should find them in
-    their history afterwards; losing them is the moment they learn that
-    signing up cost them something.
-    """
-    runs = (
-        (await db.execute(select(ToolRun).where(ToolRun.anonymous_session_id == anonymous_id)))
-        .scalars()
-        .all()
-    )
-    for run in runs:
-        run.user_id = user_id
-        run.anonymous_session_id = None
-    if runs:
-        logger.info("tools.runs_claimed", count=len(runs), user_id=user_id)
-    return len(runs)

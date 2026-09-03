@@ -26,7 +26,7 @@ class RecommendIn(BaseModel):
     """The eight inputs from `PRD.md` §8.1, plus M25's four.
 
     All of them have defaults so the form is runnable from the first screen —
-    an anonymous visitor gets a real recommendation without filling anything
+    a first-time user gets a real recommendation without filling anything
     in, which is the product's strongest demo. M25's four default to the
     answers that leave the recommendation exactly as it was before that
     module, which is what keeps every saved stack valid.

@@ -226,9 +226,9 @@ async def payload_for(db: AsyncSession, link: ShareLink) -> SharePayload:
         source: Source = await sources.stack_source_of(db, stack)
     else:
         owner = await db.get(User, link.user_id)
-        run = await get_run(
-            db, link.target_id, Identity(user=owner, anonymous_id=None, session_id=None)
-        )
+        if owner is None:
+            raise NotFound("This link is no longer available.")
+        run = await get_run(db, link.target_id, Identity(user=owner, session_id=None))
         if run is None:
             raise NotFound("This link is no longer available.")
         source = sources.run_source_of(run)

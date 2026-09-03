@@ -28,13 +28,30 @@ from app.api.deps import Identity
 from app.core.config import settings
 from app.models.ai import AiCall, AiOutcome
 from app.models.billing import Metric
-from app.models.user import Plan
+from app.models.user import Plan, User
 from app.services import ai_pricing, ai_prompts, ai_service
 from tests.conftest import set_limit
 
 
-def _identity() -> Identity:
-    return Identity(user=None, anonymous_id="anon_test", session_id=None)
+async def _identity(db: AsyncSession) -> Identity:
+    """A real row, not a detached object.
+
+    `ai_calls.user_id` carries a foreign key, so the ledger insert this file
+    asserts on fails unless the owner exists. It used to be an anonymous id on
+    a column with no foreign key, which is why a made-up value worked.
+    """
+    user = await db.get(User, "usr_test")
+    if user is None:
+        user = User(
+            id="usr_test",
+            email="ada@example.com",
+            name="Ada",
+            password_hash="x",
+            plan=Plan.FREE,
+        )
+        db.add(user)
+        await db.flush()
+    return Identity(user=user, session_id=None)
 
 
 class _FakeClient:
@@ -128,7 +145,7 @@ async def _generate(db: AsyncSession, purpose: str = "agent_plan") -> Any:
         purpose=purpose,
         grounding={"metrics": {}},
         variables={"goal": "test"},
-        identity=_identity(),
+        identity=await _identity(db),
         tool_slug="workflow-plan",
     )
 
@@ -309,7 +326,7 @@ async def test_exhausted_quota_returns_none_without_calling_the_model(
 ) -> None:
     monkeypatch.setattr(settings, "gemini_api_key", "gemini-test")
     client = _client(monkeypatch, response=_response())
-    await set_limit(db, plan=Plan.FREE, metric=Metric.AI_CALLS_PER_DAY, value=0, anonymous=True)
+    await set_limit(db, plan=Plan.FREE, metric=Metric.AI_CALLS_PER_DAY, value=0)
 
     assert await _generate(db) is None
     assert client.calls == []
@@ -379,7 +396,7 @@ async def test_the_system_prompt_comes_first_and_never_varies(
     the system text would make every request a miss with nothing to show for
     it."""
     monkeypatch.setattr(settings, "gemini_api_key", "gemini-test")
-    await set_limit(db, plan=Plan.FREE, metric=Metric.AI_CALLS_PER_DAY, value=5, anonymous=True)
+    await set_limit(db, plan=Plan.FREE, metric=Metric.AI_CALLS_PER_DAY, value=5)
     client = _client(monkeypatch, response=_response())
 
     await _generate(db)
@@ -388,7 +405,7 @@ async def test_the_system_prompt_comes_first_and_never_varies(
         purpose="agent_plan",
         grounding={"metrics": {"different": "data"}},
         variables={"goal": "a completely different goal"},
-        identity=_identity(),
+        identity=await _identity(db),
     )
 
     first, second = (call["json"] for call in client.calls)
@@ -587,7 +604,7 @@ async def test_a_repeat_call_reports_cached_reads(
     all. A miss and a hit have to be distinguishable in the ledger, or "is the
     cache working" is unanswerable after the fact."""
     monkeypatch.setattr(settings, "gemini_api_key", "gemini-test")
-    await set_limit(db, plan=Plan.FREE, metric=Metric.AI_CALLS_PER_DAY, value=5, anonymous=True)
+    await set_limit(db, plan=Plan.FREE, metric=Metric.AI_CALLS_PER_DAY, value=5)
 
     # A miss: the provider omits the cached field entirely rather than sending
     # a zero, which is the shape the reader has to survive.

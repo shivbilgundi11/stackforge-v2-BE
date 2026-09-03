@@ -231,11 +231,9 @@ class PlanQuota(Base, TimestampMixin):
     like 999_999 reads as a real limit in the UI ("0 of 999999 used") and
     invites arithmetic that treats it as one.
 
-    The `anonymous` pseudo-plan is stored here too, as a row with
-    `plan = free` and `anonymous = true`. Anonymous callers are metered like
-    everyone else (they are the top of the funnel, and an unmetered anonymous
-    tier is a free API), but their limits are lower than a registered free
-    account's — otherwise signing up buys nothing.
+    One row per (plan, metric). There used to be a second discriminator —
+    `anonymous`, for the allowance a caller with no account got — and it is
+    gone with the tier it described.
     """
 
     __tablename__ = "plan_quotas"
@@ -246,9 +244,6 @@ class PlanQuota(Base, TimestampMixin):
         Enum(Plan, name="plan", values_callable=lambda e: [m.value for m in e], create_type=False),
         nullable=False,
     )
-    anonymous: Mapped[bool] = mapped_column(
-        nullable=False, default=False, server_default=text("false")
-    )
     metric: Mapped[Metric] = mapped_column(
         Enum(Metric, name="quota_metric", values_callable=lambda e: [m.value for m in e]),
         nullable=False,
@@ -257,17 +252,10 @@ class PlanQuota(Base, TimestampMixin):
     limit_value: Mapped[int | None] = mapped_column(Integer)
 
     __table_args__ = (
-        UniqueConstraint(
-            "plan", "anonymous", "metric", name="uq_plan_quotas_plan_anonymous_metric"
-        ),
+        UniqueConstraint("plan", "metric", name="uq_plan_quotas_plan_metric"),
         CheckConstraint(
             "limit_value IS NULL OR limit_value >= 0",
             name="limit_not_negative",
-        ),
-        # Anonymous is a variant of free, never of a paid plan.
-        CheckConstraint(
-            "anonymous IS FALSE OR plan = 'free'",
-            name="anonymous_is_free",
         ),
     )
 
@@ -288,9 +276,6 @@ class UsageRecord(Base):
 
     user_id: Mapped[str | None] = mapped_column(
         String(64), ForeignKey("users.id", ondelete="CASCADE")
-    )
-    anonymous_session_id: Mapped[str | None] = mapped_column(
-        String(64), ForeignKey("anonymous_sessions.id", ondelete="CASCADE")
     )
     organization_id: Mapped[str | None] = mapped_column(String(64))
 
@@ -318,16 +303,10 @@ class UsageRecord(Base):
 
     __table_args__ = (
         CheckConstraint(
-            "num_nonnulls(user_id, anonymous_session_id, organization_id) = 1",
+            "num_nonnulls(user_id, organization_id) = 1",
             name="exactly_one_owner",
         ),
         Index("ix_usage_records_user_id_metric_period_start", "user_id", "metric", "period_start"),
-        Index(
-            "ix_usage_records_anonymous_session_id_metric_period_start",
-            "anonymous_session_id",
-            "metric",
-            "period_start",
-        ),
     )
 
 

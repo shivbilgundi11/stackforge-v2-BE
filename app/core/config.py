@@ -61,7 +61,6 @@ class Settings(BaseSettings):
     invite_ttl_days: int = 7
 
     refresh_cookie_name: str = "__sf_rt"
-    anon_cookie_name: str = "__sf_anon"
     cookie_domain: str | None = None
     cookie_secure: bool = False
 

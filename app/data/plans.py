@@ -18,13 +18,12 @@ written-down origin — but changing the free tier from 5 runs to 10 is an
 `UPDATE` against the table, and a re-seed will not overwrite it (the seeder is
 non-destructive, same rule as the catalog).
 
-## Why anonymous is a row and not a plan
+## One row per plan
 
-`anonymous` is not a fourth plan; it is a variant of free, stored as
-`(plan=free, anonymous=true)`. Anonymous callers reach every tool and get 5 runs
-a day (D-17), which is deliberately *less* than a registered free account gets
-— if signing up bought nothing, the account would have no purpose until the
-user wanted to save something, and by then they have already left.
+There used to be a fifth bucket — `(plan=free, anonymous=true)`, the allowance
+for a caller with no account. The product no longer has callers with no
+account: every surface is behind sign-in, so free *is* the entry tier and the
+`anonymous` discriminator that keyed these rows is gone.
 """
 
 from __future__ import annotations
@@ -70,10 +69,6 @@ class FeatureSpec:
     key: Feature
     label: str
     minimum_plan: Plan
-    #: An anonymous caller is treated as free for plan comparison, so a feature
-    #: that only needs the free plan would otherwise be open to them. Saving,
-    #: sharing, and projects all need an owner that survives a cookie.
-    requires_account: bool
     #: What the locked state says. Naming the thing being sold rather than the
     #: wall in front of it — M18's UpgradeDialog reads this.
     pitch: str
@@ -84,14 +79,12 @@ FEATURES: Final[tuple[FeatureSpec, ...]] = (
         key=Feature.EXPORT_MARKDOWN,
         label="Markdown export",
         minimum_plan=Plan.FREE,
-        requires_account=False,
         pitch="The whole answer as Markdown — every figure, table, and source on the page.",
     ),
     FeatureSpec(
         key=Feature.EXPORT_JSON,
         label="JSON export",
         minimum_plan=Plan.PRO,
-        requires_account=True,
         pitch=(
             "The full result as structured data, with a versioned envelope — "
             "for a pipeline, a diff, or a script."
@@ -101,21 +94,18 @@ FEATURES: Final[tuple[FeatureSpec, ...]] = (
         key=Feature.EXPORT_YAML,
         label="YAML export",
         minimum_plan=Plan.PRO,
-        requires_account=True,
         pitch="The same structured data as JSON, in the format your config tooling already reads.",
     ),
     FeatureSpec(
         key=Feature.EXPORT_CSV,
         label="CSV export",
         minimum_plan=Plan.PRO,
-        requires_account=True,
         pitch="One table, ready for a spreadsheet.",
     ),
     FeatureSpec(
         key=Feature.EXPORT_PDF,
         label="PDF export",
         minimum_plan=Plan.PRO,
-        requires_account=True,
         pitch=(
             "A laid-out, paginated document with a cover page and your share link "
             "in the footer — the version you send to a client."
@@ -125,7 +115,6 @@ FEATURES: Final[tuple[FeatureSpec, ...]] = (
         key=Feature.EXPORT_ZIP,
         label="Bundle export",
         minimum_plan=Plan.PRO,
-        requires_account=True,
         pitch=(
             "Every file in the plan as one download: the architecture document, "
             "the diagram, the roadmap, a starter Compose file, and .cursorrules."
@@ -135,21 +124,18 @@ FEATURES: Final[tuple[FeatureSpec, ...]] = (
         key=Feature.SAVE_WORK,
         label="Saved work",
         minimum_plan=Plan.FREE,
-        requires_account=True,
         pitch="Keep a run past the 30-day purge and reopen it whenever you like.",
     ),
     FeatureSpec(
         key=Feature.SHARE_LINKS,
         label="Share links",
         minimum_plan=Plan.FREE,
-        requires_account=True,
         pitch="A public link to a result that opens logged out — and that you can revoke.",
     ),
     FeatureSpec(
         key=Feature.PROJECTS,
         label="Projects",
         minimum_plan=Plan.PRO,
-        requires_account=True,
         pitch=(
             "Group runs, stacks, and exports into a project, and carry one session between tools."
         ),
@@ -158,28 +144,24 @@ FEATURES: Final[tuple[FeatureSpec, ...]] = (
         key=Feature.PREMIUM_TEMPLATES,
         label="Premium templates",
         minimum_plan=Plan.PRO,
-        requires_account=True,
         pitch="The full template library, including the production blueprints and code starters.",
     ),
     FeatureSpec(
         key=Feature.P2_TOOLS,
         label="Advanced tools",
         minimum_plan=Plan.PRO,
-        requires_account=True,
         pitch="The advanced calculators beyond the twenty-eight open ones.",
     ),
     FeatureSpec(
         key=Feature.TEAM_WORKSPACE,
         label="Team workspace",
         minimum_plan=Plan.TEAM,
-        requires_account=True,
         pitch="A shared workspace with roles, shared stacks, comments, and approvals.",
     ),
     FeatureSpec(
         key=Feature.ALERTS,
         label="Price and deprecation alerts",
         minimum_plan=Plan.PRO,
-        requires_account=True,
         pitch=(
             "An email when a price in one of your saved estimates moves more than 10 %, "
             "or when a tool you depend on is deprecated."
@@ -337,23 +319,12 @@ PLAN_RANK: Final[dict[Plan, int]] = {
 # a real limit ("3 of 999999 used") and invites arithmetic that treats it as
 # one.
 
-#: `(plan, anonymous) -> {metric: limit}`.
-DEFAULT_QUOTAS: Final[dict[tuple[Plan, bool], dict[Metric, int | None]]] = {
-    (Plan.FREE, True): {
-        # D-17: five a day, no account, every tool reachable. Enough to see
-        # that the tool works; not enough to make signing up optional.
-        Metric.TOOL_RUNS_PER_DAY: 5,
-        Metric.AI_CALLS_PER_DAY: 2,
-        Metric.PROJECTS: 0,
-        Metric.SAVED_STACKS: 0,
-        Metric.EXPORTS_PER_MONTH: 20,
-        Metric.SEATS: 0,
-    },
-    (Plan.FREE, False): {
-        # Five times the anonymous allowance. M20's plan table lists 5 for
-        # free, which is the anonymous figure — leaving them equal would mean
-        # registering buys nothing until the user wants to save, and by then
-        # most of them have gone.
+#: `plan -> {metric: limit}`.
+DEFAULT_QUOTAS: Final[dict[Plan, dict[Metric, int | None]]] = {
+    Plan.FREE: {
+        # The entry tier, and the one every new account lands on. Generous
+        # enough to plan a real stack with; not so generous that a team never
+        # needs Pro.
         Metric.TOOL_RUNS_PER_DAY: 25,
         Metric.AI_CALLS_PER_DAY: 3,
         Metric.PROJECTS: 0,
@@ -363,7 +334,7 @@ DEFAULT_QUOTAS: Final[dict[tuple[Plan, bool], dict[Metric, int | None]]] = {
         Metric.EXPORTS_PER_MONTH: 30,
         Metric.SEATS: 0,
     },
-    (Plan.PRO, False): {
+    Plan.PRO: {
         Metric.TOOL_RUNS_PER_DAY: None,
         Metric.AI_CALLS_PER_DAY: 100,
         Metric.PROJECTS: 20,
@@ -371,7 +342,7 @@ DEFAULT_QUOTAS: Final[dict[tuple[Plan, bool], dict[Metric, int | None]]] = {
         Metric.EXPORTS_PER_MONTH: 200,
         Metric.SEATS: 1,
     },
-    (Plan.TEAM, False): {
+    Plan.TEAM: {
         Metric.TOOL_RUNS_PER_DAY: None,
         Metric.AI_CALLS_PER_DAY: 300,
         Metric.PROJECTS: None,
@@ -381,7 +352,7 @@ DEFAULT_QUOTAS: Final[dict[tuple[Plan, bool], dict[Metric, int | None]]] = {
         # subscription; this is the floor a Team plan starts at.
         Metric.SEATS: 5,
     },
-    (Plan.ENTERPRISE, False): {
+    Plan.ENTERPRISE: {
         Metric.TOOL_RUNS_PER_DAY: None,
         Metric.AI_CALLS_PER_DAY: None,
         Metric.PROJECTS: None,

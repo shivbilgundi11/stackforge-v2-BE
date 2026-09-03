@@ -27,7 +27,6 @@ import enum
 from datetime import datetime
 
 from sqlalchemy import (
-    CheckConstraint,
     DateTime,
     Enum,
     ForeignKey,
@@ -78,14 +77,8 @@ class Export(Base):
 
     id: Mapped[str] = mapped_column(String(64), primary_key=True, default=lambda: new_id("exp"))
 
-    # Anonymous callers export too — Markdown is free and reaches every tool,
-    # and an export that required an account would put the paywall in front of
-    # the answer rather than in front of keeping it.
-    user_id: Mapped[str | None] = mapped_column(
-        String(64), ForeignKey("users.id", ondelete="CASCADE")
-    )
-    anonymous_session_id: Mapped[str | None] = mapped_column(
-        String(64), ForeignKey("anonymous_sessions.id", ondelete="SET NULL")
+    user_id: Mapped[str] = mapped_column(
+        String(64), ForeignKey("users.id", ondelete="CASCADE"), nullable=False
     )
 
     source_type: Mapped[SourceType] = mapped_column(
@@ -121,13 +114,8 @@ class Export(Base):
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
     __table_args__ = (
-        # Same rule as `tool_runs`: exactly one owner, enforced by the
-        # database. An export with neither vanishes from every listing while
-        # still occupying storage nobody can find.
-        CheckConstraint(
-            "num_nonnulls(user_id, anonymous_session_id) = 1",
-            name="exactly_one_owner",
-        ),
+        # Same rule as `tool_runs`: exactly one owner, now expressed as a NOT
+        # NULL column rather than a check across two nullable ones.
         Index("ix_exports_user_id_created_at", "user_id", text("created_at DESC")),
         Index("ix_exports_expires_at", "expires_at"),
         Index(
@@ -141,9 +129,9 @@ class Export(Base):
 class ShareLink(Base, TimestampMixin):
     """A capability URL over something the owner made.
 
-    Requires an account. An anonymous visitor can run every tool and export
-    Markdown, but a link they cannot later revoke is a link they cannot take
-    back — and the revoke switch is the only protection this design has.
+    Owned by the account that made it. A link nobody can later revoke is a
+    link nobody can take back, and the revoke switch is the only protection
+    this design has.
     """
 
     __tablename__ = "share_links"

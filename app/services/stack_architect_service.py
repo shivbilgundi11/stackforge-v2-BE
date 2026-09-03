@@ -674,7 +674,7 @@ def rule_summary(candidate: Candidate, requirements: Requirements) -> str:
     """What ships when synthesis is unavailable.
 
     Has to read as a real explanation rather than a placeholder: this is the
-    text an anonymous user sees on the demo path when no key is configured.
+    text a user sees on the demo path when no key is configured.
     """
     names = [tool.name for tool in candidate.components]
     lead = names[0] if names else "no components"

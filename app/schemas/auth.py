@@ -68,10 +68,6 @@ class UpdateProfileRequest(_Base):
     avatar_url: str | None = Field(default=None, max_length=2048)
 
 
-class ClaimAnonymousRequest(_Base):
-    anonymous_id: str = Field(min_length=8, max_length=64)
-
-
 # ── Responses ───────────────────────────────────────────────────────────────
 
 
@@ -154,21 +150,12 @@ class SessionListOut(_Base):
     sessions: list[SessionOut]
 
 
-class AnonymousSessionOut(_Base):
-    anonymous_id: str
-
-
 class IdentityOut(_Base):
-    """Unauthenticated-safe. Lets the client choose between the signed-in and
-    anonymous experience on first load without a 401 round trip."""
+    """Unauthenticated-safe: answers "is there a session?" without the 401
+    every other route would give, so a client can tell signed-out from
+    down."""
 
     authenticated: bool
     user: UserOut | None
-    anonymous_id: str | None
-    plan: Plan
+    plan: Plan | None
     server_time: datetime
-
-
-class ClaimResult(_Base):
-    claimed: bool
-    reassigned: int

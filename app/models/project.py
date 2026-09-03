@@ -75,7 +75,7 @@ class Project(Base, TimestampMixin):
 
     #: The cross-workflow session (`PRD.md` §8.7) — the values a user carries
     #: between tools. Server-side so it survives a device change; the Zustand
-    #: store mirrors it for the anonymous case.
+    #: store mirrors it.
     session_state: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict)
 
     #: Archived rather than deleted by default. A project is the container a

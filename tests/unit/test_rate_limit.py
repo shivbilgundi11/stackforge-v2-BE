@@ -118,11 +118,10 @@ async def test_two_requests_in_the_same_instant_both_count(
 
 
 async def test_tool_runs_are_not_limited_here_for_the_plans_quotas_bound() -> None:
-    """Anonymous and Free get 5 tool runs a *day* from `plan_quotas` — far
-    tighter than any hourly window. A limit here as well would be two sources
-    of truth for one number, and the one nobody edits drifts."""
-    for plan in (None, Plan.FREE):
-        assert await rate_limit.check(rate_limit.TOOL_RUN, identity_key="u:d", plan=plan) is None
+    """Free gets its tool runs a *day* from `plan_quotas` — far tighter than
+    any hourly window. A limit here as well would be two sources of truth for
+    one number, and the one nobody edits drifts."""
+    assert await rate_limit.check(rate_limit.TOOL_RUN, identity_key="u:d", plan=Plan.FREE) is None
 
 
 async def test_paid_plans_do_get_an_hourly_tool_ceiling() -> None:
@@ -137,6 +136,9 @@ async def test_paid_plans_do_get_an_hourly_tool_ceiling() -> None:
 def test_the_policy_matches_the_published_contract() -> None:
     """06-API-Contract §Rate limits is the source. Transcribed by hand, so
     asserted by hand — a policy that only agrees with itself is not checked."""
+    # The `None` key is a caller with no session. It used to be the anonymous
+    # tier, which reached everything; it now covers only the genuinely public
+    # routes — a share link and the identity probe — keyed by IP.
     assert {plan: w.limit if w else None for plan, w in rate_limit.READ.by_plan.items()} == {
         None: 100,
         Plan.FREE: 300,

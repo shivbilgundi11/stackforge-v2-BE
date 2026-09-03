@@ -4,7 +4,7 @@ Every route here is public. No `CurrentUser`, no gate on reading — `PRD.md` §
 makes this the product's best organic acquisition surface, and an endpoint
 behind a token cannot be crawled, shared, or be the thing that brings someone
 in. `CallerIdentity` appears only to decide whether a premium *body* is
-unlocked, and it resolves happily to an anonymous caller.
+unlocked.
 """
 
 from __future__ import annotations
@@ -66,7 +66,7 @@ async def get_template_library(db: Db, identity: CallerIdentity) -> dict[str, An
 
     featured: list[Template] = []
     for slug in FEATURED:
-        row = await db.scalar(template_service._visible(identity).where(Template.slug == slug))
+        row = await db.scalar(template_service._visible().where(Template.slug == slug))
         if row is not None:
             featured.append(row)
 

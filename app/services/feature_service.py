@@ -78,22 +78,17 @@ class Allow:
 class Deny:
     """Carries everything the upgrade dialog needs to be specific.
 
-    `required_plan` and `requires_account` are separate because they lead to
-    different buttons: one goes to checkout, the other to signup. A single
-    "upgrade" verdict would send an anonymous visitor to a billing page for an
-    account they do not have.
+    There was a second axis here — `requires_account`, for a caller with no
+    account at all, which led to a signup button rather than a checkout. Every
+    caller has an account now, so a denial is always about the plan.
     """
 
     reason: str
     required_plan: Plan | None = None
-    requires_account: bool = False
     allowed: bool = False
 
     def as_details(self) -> dict[str, object]:
-        return {
-            "required_plan": self.required_plan.value if self.required_plan else None,
-            "requires_account": self.requires_account,
-        }
+        return {"required_plan": self.required_plan.value if self.required_plan else None}
 
 
 Verdict = Allow | Deny
@@ -108,13 +103,6 @@ def can(identity: Identity, feature: Feature) -> Verdict:
     fifteen minutes.
     """
     spec = feature_spec(feature)
-
-    if spec.requires_account and not identity.is_authenticated:
-        return Deny(
-            reason=f"{spec.label} needs an account.",
-            required_plan=spec.minimum_plan if spec.minimum_plan is not Plan.FREE else None,
-            requires_account=True,
-        )
 
     if not outranks(identity.plan, spec.minimum_plan):
         return Deny(
@@ -142,7 +130,7 @@ def require(identity: Identity, feature: Feature) -> None:
 
 _CACHE_TTL_SECONDS: Final = 60
 
-_limits_cache: dict[tuple[Plan, bool], dict[Metric, int | None]] = {}
+_limits_cache: dict[Plan, dict[Metric, int | None]] = {}
 _limits_cached_at: datetime | None = None
 
 
@@ -153,7 +141,7 @@ def invalidate_limits() -> None:
     _limits_cached_at = None
 
 
-async def _load_limits(db: AsyncSession) -> dict[tuple[Plan, bool], dict[Metric, int | None]]:
+async def _load_limits(db: AsyncSession) -> dict[Plan, dict[Metric, int | None]]:
     global _limits_cached_at
 
     fresh = (
@@ -164,9 +152,9 @@ async def _load_limits(db: AsyncSession) -> dict[tuple[Plan, bool], dict[Metric,
         return _limits_cache
 
     rows = (await db.execute(select(PlanQuota))).scalars().all()
-    loaded: dict[tuple[Plan, bool], dict[Metric, int | None]] = {}
+    loaded: dict[Plan, dict[Metric, int | None]] = {}
     for row in rows:
-        loaded.setdefault((row.plan, row.anonymous), {})[row.metric] = row.limit_value
+        loaded.setdefault(row.plan, {})[row.metric] = row.limit_value
 
     _limits_cache.clear()
     _limits_cache.update(loaded)
@@ -184,13 +172,10 @@ async def limit_for(db: AsyncSession, identity: Identity, metric: Metric) -> int
     runs in the same command as the migrations.
     """
     limits = await _load_limits(db)
-    key = (identity.plan, not identity.is_authenticated)
 
-    bucket = limits.get(key)
+    bucket = limits.get(identity.plan)
     if bucket is None or metric not in bucket:
-        bucket = limits.get((Plan.FREE, not identity.is_authenticated)) or limits.get(
-            (Plan.FREE, False), {}
-        )
+        bucket = limits.get(Plan.FREE, {})
     if metric not in bucket:
         logger.warning("features.missing_quota_row", metric=metric.value, plan=identity.plan.value)
         return 0
@@ -283,7 +268,7 @@ _METRIC_LABELS: Final[dict[Metric, str]] = {
 
 
 def _plan_label(identity: Identity) -> str:
-    return identity.plan.value if identity.is_authenticated else "anonymous"
+    return identity.plan.value
 
 
 # ── Counting ────────────────────────────────────────────────────────────────
@@ -304,15 +289,7 @@ async def _rate_used(identity: Identity, metric: Metric, period: str) -> int:
 
 
 async def _level_used(db: AsyncSession, identity: Identity, metric: Metric) -> int:
-    """Count the rows a level metric measures.
-
-    Only a signed-in caller can own any of these, so an anonymous identity is
-    always at zero — which, with an anonymous limit of zero, denies. That is
-    the intended answer: a project belonging to a cookie would vanish with it.
-    """
-    if identity.user is None:
-        return 0
-
+    """Count the rows a level metric measures."""
     match metric:
         case Metric.PROJECTS:
             stmt = (
@@ -545,22 +522,19 @@ async def _record(
 ) -> None:
     """The durable half of the counter.
 
-    Wrapped in a savepoint because the owner columns carry foreign keys and an
-    anonymous id can arrive from a cookie whose session has since been purged.
-    Without the savepoint that insert would poison the request's transaction
-    and turn a routine tool run into a 500 — the usage row is a record, and a
-    record that cannot be written must not take the request with it.
+    Wrapped in a savepoint because the owner column carries a foreign key and
+    the account can be deleted between the read and this write. Without the
+    savepoint that insert would poison the request's transaction and turn a
+    routine tool run into a 500 — the usage row is a record, and a record that
+    cannot be written must not take the request with it.
     """
     row = UsageRecord(
         id=new_id("use"),
-        user_id=identity.user.id if identity.user else None,
-        anonymous_session_id=None if identity.user else identity.anonymous_id,
+        user_id=identity.user.id,
         metric=metric,
         quantity=amount,
         period_start=period_start,
     )
-    if row.user_id is None and row.anonymous_session_id is None:
-        return
 
     try:
         async with db.begin_nested():

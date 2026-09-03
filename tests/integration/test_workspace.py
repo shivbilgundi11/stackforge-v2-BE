@@ -92,12 +92,12 @@ async def test_saving_and_unsaving_a_run(client: AsyncClient, db: AsyncSession) 
     assert (await client.get(f"{RUNS}/{run_id}")).status_code == 200
 
 
-async def test_an_anonymous_user_cannot_save_but_can_still_run(client: AsyncClient) -> None:
-    """Running and exporting are free. Keeping is what the account is for."""
-    run_id = await _a_run(client)
+async def test_running_needs_a_session(anon_client: AsyncClient) -> None:
+    """Running used to be free and anonymous, with saving the first thing an
+    account bought. The whole surface is behind the door now."""
+    response = await anon_client.post(LLM_PRICING, json=BASE_RUN)
 
-    response = await client.post(f"{RUNS}/{run_id}/save")
-    assert response.status_code == 403
+    assert response.status_code == 401
 
 
 async def test_the_purge_removes_unsaved_runs_and_spares_saved_ones(
@@ -132,23 +132,17 @@ async def test_a_recent_unsaved_run_is_not_purged(client: AsyncClient, db: Async
     assert await db.get(ToolRun, run_id) is not None
 
 
-async def test_an_anonymous_run_is_claimed_on_signup(client: AsyncClient, db: AsyncSession) -> None:
-    """The highest-intent conversion moment the product has: the work is
-    already done, and the account is what keeps it."""
+async def test_a_run_reaches_the_dashboard_of_the_account_that_made_it(
+    client: AsyncClient, db: AsyncSession
+) -> None:
+    """There used to be a claim step here — work done anonymously moved onto
+    the account at login, which was the product's highest-intent conversion
+    moment. There is nothing to claim now: the run is owned when it is made."""
     run_id = await _a_run(client)
 
-    anonymous = await db.get(ToolRun, run_id)
-    assert anonymous is not None
-    assert anonymous.user_id is None
-    assert anonymous.anonymous_session_id is not None
-
-    await _sign_in(client, db, "claimer@example.com")
-
-    claimed = await db.get(ToolRun, run_id)
-    await db.refresh(claimed)  # type: ignore[arg-type]
-    assert claimed is not None
-    assert claimed.user_id is not None
-    assert claimed.anonymous_session_id is None
+    run = await db.get(ToolRun, run_id)
+    assert run is not None
+    assert run.user_id is not None
 
     dashboard = await client.get(DASHBOARD)
     assert run_id in {row["run_id"] for row in dashboard.json()["data"]["recent_runs"]}

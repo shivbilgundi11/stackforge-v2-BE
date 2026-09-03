@@ -480,20 +480,18 @@ async def seed_plan_quotas(db: AsyncSession, report: SeedReport, *, refresh: boo
     from app.models.billing import PlanQuota
 
     existing = {
-        (row.plan, row.anonymous, row.metric): row
-        for row in (await db.execute(select(PlanQuota))).scalars().all()
+        (row.plan, row.metric): row for row in (await db.execute(select(PlanQuota))).scalars().all()
     }
 
     inserted = updated = skipped = 0
-    for (plan, anonymous), limits in DEFAULT_QUOTAS.items():
+    for plan, limits in DEFAULT_QUOTAS.items():
         for metric, limit in limits.items():
-            current = existing.get((plan, anonymous, metric))
+            current = existing.get((plan, metric))
             if current is None:
                 db.add(
                     PlanQuota(
                         id=new_id("pq"),
                         plan=plan,
-                        anonymous=anonymous,
                         metric=metric,
                         limit_value=limit,
                     )

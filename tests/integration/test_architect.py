@@ -294,11 +294,13 @@ async def _login(client: AsyncClient, db: AsyncSession, email: str) -> None:
     client.headers["Authorization"] = f"Bearer {token}"
 
 
-async def test_anonymous_users_can_recommend_but_not_save(client: AsyncClient) -> None:
-    """The demo is public; saving is the conversion moment."""
-    assert (await client.post(RECOMMEND, json={})).status_code == 200
+async def test_recommending_and_saving_both_need_a_session(anon_client: AsyncClient) -> None:
+    """`/recommend` used to be the public demo — one full recommendation with
+    no account, on the theory that the product working is the best pitch for
+    it. It is behind the same door as everything else now."""
+    assert (await anon_client.post(RECOMMEND, json={})).status_code == 401
     assert (
-        await client.post(STACKS, json={"name": "Mine", "component_slugs": ["pgvector"]})
+        await anon_client.post(STACKS, json={"name": "Mine", "component_slugs": ["pgvector"]})
     ).status_code == 401
 
 

@@ -53,7 +53,7 @@ def _identity(user: User) -> Identity:
     — the reverse is not true, which is why the quota layer takes the wider
     type.
     """
-    return Identity(user=user, anonymous_id=None, session_id=None)
+    return Identity(user=user, session_id=None)
 
 
 async def limit_for(db: AsyncSession, user: User) -> int | None:

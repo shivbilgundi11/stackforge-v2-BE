@@ -16,7 +16,6 @@ from typing import Any
 
 from sqlalchemy import (
     Boolean,
-    CheckConstraint,
     DateTime,
     Enum,
     ForeignKey,
@@ -44,11 +43,8 @@ class ToolRun(Base):
     tool_slug: Mapped[str] = mapped_column(String(80), nullable=False)
     workflow: Mapped[str] = mapped_column(String(40), nullable=False)
 
-    user_id: Mapped[str | None] = mapped_column(
-        String(64), ForeignKey("users.id", ondelete="CASCADE")
-    )
-    anonymous_session_id: Mapped[str | None] = mapped_column(
-        String(64), ForeignKey("anonymous_sessions.id", ondelete="SET NULL")
+    user_id: Mapped[str] = mapped_column(
+        String(64), ForeignKey("users.id", ondelete="CASCADE"), nullable=False
     )
     organization_id: Mapped[str | None] = mapped_column(String(64))
     project_id: Mapped[str | None] = mapped_column(String(64))
@@ -63,28 +59,20 @@ class ToolRun(Base):
     )
     ai_call_id: Mapped[str | None] = mapped_column(String(64))
     duration_ms: Mapped[int] = mapped_column(Integer, nullable=False)
-    # Unsaved rows purge after 30 days. Keeping every anonymous calculation
-    # forever would make this the largest table in the database within a year,
-    # for data nobody asked to keep.
+    # Unsaved rows purge after 30 days. Keeping every calculation forever
+    # would make this the largest table in the database within a year, for data
+    # nobody asked to keep.
     saved: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
 
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
     __table_args__ = (
-        # Exactly one owner. Without this, a bug that forgets to set either
-        # produces orphan rows that quietly vanish from every per-user query
-        # and inflate the totals.
-        CheckConstraint(
-            "num_nonnulls(user_id, anonymous_session_id) = 1",
-            name="exactly_one_owner",
-        ),
+        # `user_id` used to be one of two nullable owner columns held to
+        # exactly one by a check constraint. With the anonymous tier gone it is
+        # simply NOT NULL, which is the same guarantee with none of the
+        # machinery.
         Index("ix_tool_runs_user_id_created_at", "user_id", text("created_at DESC")),
         Index("ix_tool_runs_tool_slug_created_at", "tool_slug", text("created_at DESC")),
-        Index(
-            "ix_tool_runs_anonymous_session_id",
-            "anonymous_session_id",
-            postgresql_where=text("anonymous_session_id IS NOT NULL"),
-        ),
         Index(
             "ix_tool_runs_created_at_unsaved",
             "created_at",

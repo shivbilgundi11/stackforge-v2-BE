@@ -86,7 +86,7 @@ app.add_middleware(
     allow_methods=["GET", "POST", "PATCH", "PUT", "DELETE", "OPTIONS"],
     # X-Organization-Id is the org switcher's scope header (M21). A custom
     # header makes every request preflighted, and one missing from this list
-    # fails the preflight — which surfaces as "the whole app went anonymous",
+    # fails the preflight — which surfaces as "the whole app signed itself out",
     # not as a CORS error anywhere useful.
     allow_headers=[
         "Authorization",

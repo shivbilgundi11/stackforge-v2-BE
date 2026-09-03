@@ -58,7 +58,7 @@ async def create_share(db: Db, user: CurrentUser, payload: ShareIn) -> dict[str,
         db,
         source_type=target_type,
         source_id=payload.target_id,
-        identity=Identity(user=user, anonymous_id=None, session_id=None),
+        identity=Identity(user=user, session_id=None),
     )
     link = await share_service.create(
         db,

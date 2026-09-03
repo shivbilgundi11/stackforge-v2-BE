@@ -25,8 +25,8 @@ async def test_a_read_carries_its_budget_on_success(client: AsyncClient) -> None
     response = await client.get(READS)
 
     assert response.status_code == 200
-    assert response.headers["X-RateLimit-Limit"] == "100"  # anonymous
-    assert response.headers["X-RateLimit-Remaining"] == "99"
+    assert response.headers["X-RateLimit-Limit"] == "300"  # free
+    assert response.headers["X-RateLimit-Remaining"] == "299"
     assert int(response.headers["X-RateLimit-Reset"]) > 0
 
 
@@ -42,7 +42,7 @@ async def test_the_budget_counts_down_across_requests(client: AsyncClient) -> No
 async def test_exhausting_the_window_returns_429_in_the_standard_envelope(
     client: AsyncClient,
 ) -> None:
-    window = rate_limit.READ.by_plan[None]
+    window = rate_limit.READ.by_plan[Plan.FREE]
     assert window is not None
     for _ in range(window.limit):
         await client.get(READS)
@@ -61,7 +61,7 @@ async def test_exhausting_the_window_returns_429_in_the_standard_envelope(
 async def test_health_is_never_rate_limited(client: AsyncClient) -> None:
     """A throttled liveness probe is an outage that restarts healthy
     containers — the failure mode that makes a limiter worse than none."""
-    window = rate_limit.READ.by_plan[None]
+    window = rate_limit.READ.by_plan[Plan.FREE]
     assert window is not None
     for _ in range(window.limit + 5):
         await client.get(READS)
@@ -75,17 +75,7 @@ async def test_health_is_never_rate_limited(client: AsyncClient) -> None:
 async def test_a_tool_run_does_not_spend_the_read_budget(client: AsyncClient) -> None:
     """Different classes, different keys. Browsing the catalogue must not use
     up the allowance for running a tool, or the two limits are really one.
-
-    The first tool run is what *mints* the anonymous session, which moves this
-    caller's limiter key from `ip:` to `a:`. So the run happens first and the
-    two reads are measured either side of a stable key — otherwise this
-    measures the key change rather than the thing under test.
     """
-    await client.post(
-        "/api/v1/tools/cost/token-calculator",
-        json={"text": "hello world", "model_id": "gpt-4o"},
-    )
-
     before = await client.get(READS)
     await client.post(
         "/api/v1/tools/cost/token-calculator",
@@ -99,14 +89,17 @@ async def test_a_tool_run_does_not_spend_the_read_budget(client: AsyncClient) ->
     assert spent == 1, "the tool run consumed part of the read budget"
 
 
-async def test_an_anonymous_read_does_not_mint_a_session(client: AsyncClient) -> None:
-    """The limiter keys on identity, and reaching for the *run* identity to
-    get one would set an anonymous session cookie on every crawler that
-    touches a public read."""
-    response = await client.get(READS)
+async def test_a_public_read_is_limited_by_ip_not_refused(anon_client: AsyncClient) -> None:
+    """`/s/{token}` is reachable without a session by design, and the limiter
+    sits on that router. Keying it on a caller who must be signed in would put
+    every public share link behind the door — which is what a `CallerIdentity`
+    dependency here would do."""
+    response = await anon_client.get("/api/v1/s/nonexistent-token")
 
-    assert response.status_code == 200
-    assert "set-cookie" not in {key.lower() for key in response.headers}
+    # 404 rather than 401: the limiter let it through and the handler simply
+    # found no such link. A 401 here would mean the read limit had quietly
+    # become an authentication gate.
+    assert response.status_code == 404
 
 
 def test_every_router_that_should_be_limited_is() -> None:

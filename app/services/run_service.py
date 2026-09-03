@@ -30,7 +30,7 @@ from app.repositories import scoped
 logger = get_logger("runs")
 
 #: How long an unsaved run survives. Long enough that "I closed the tab" is
-#: recoverable; short enough that anonymous traffic does not become the
+#: recoverable; short enough that unsaved traffic does not become the
 #: largest table in the database inside a year.
 RETENTION_DAYS: Final = 30
 
@@ -38,7 +38,7 @@ RETENTION_DAYS: Final = 30
 async def save(db: AsyncSession, run_id: str, identity: Identity) -> ToolRun:
     """Promote an ephemeral run to a saved one.
 
-    Requires an account. An anonymous user can run anything and export the
+    Requires a saved run. A user can run anything and export the
     result immediately, but keeping it is what the account is for — and it is
     the highest-intent moment the product has to ask for one.
     """

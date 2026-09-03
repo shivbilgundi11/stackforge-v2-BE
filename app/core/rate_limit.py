@@ -75,14 +75,18 @@ class RateLimitClass(NamedTuple):
     """One row of the policy table in 06-API-Contract §Rate limits."""
 
     name: str
-    #: By plan. `None` means the class does not limit that plan here — which
-    #: is not the same as unlimited: the daily allowance in `plan_quotas` may
-    #: still apply, and for tool runs on Free it is the only thing that does.
+    #: By plan. `None` as a *value* means the class does not limit that plan
+    #: here — which is not the same as unlimited: the daily allowance in
+    #: `plan_quotas` may still apply, and for tool runs on Free it is the only
+    #: thing that does.
     by_plan: dict[Plan | None, Window | None]
 
 
-#: Anonymous callers have no `Plan`, so `None` keys the anonymous column
-#: rather than a sentinel plan that would have to be excluded everywhere else.
+#: The `None` key is a caller with no session. That used to be the anonymous
+#: tier, which reached everything; it is now only the genuinely public routes —
+#: a share link and the identity probe — which are keyed by IP and get the
+#: tightest window, because an unauthenticated caller is the one that cannot be
+#: held to an account.
 READ: Final = RateLimitClass(
     "read",
     {
@@ -93,9 +97,10 @@ READ: Final = RateLimitClass(
     },
 )
 
-#: Only the paid tiers appear. Anonymous and Free are capped at 5 runs a *day*
-#: by `plan_quotas`, which is a far tighter bound than any hourly window would
-#: be — adding one here would be dead code that looks load-bearing.
+#: Only the paid tiers appear. Free is capped by the daily allowance in
+#: `plan_quotas`, which is a far tighter bound than any hourly window would be
+#: — adding one here would be dead code that looks load-bearing. No tool route
+#: is reachable without a session, so the `None` key never resolves here.
 TOOL_RUN: Final = RateLimitClass(
     "tool_run",
     {
@@ -212,7 +217,7 @@ async def check(klass: RateLimitClass, *, identity_key: str, plan: Plan | None) 
             "ratelimit.exceeded",
             klass=klass.name,
             limit=window.limit,
-            plan=plan.value if plan else "anonymous",
+            plan=plan.value if plan else "no-session",
         )
 
     return Decision(

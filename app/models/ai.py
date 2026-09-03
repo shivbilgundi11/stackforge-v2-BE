@@ -59,7 +59,6 @@ class AiCall(Base):
     user_id: Mapped[str | None] = mapped_column(
         String(64), ForeignKey("users.id", ondelete="SET NULL")
     )
-    anonymous_session_id: Mapped[str | None] = mapped_column(String(64))
     tool_slug: Mapped[str | None] = mapped_column(String(80))
 
     input_tokens: Mapped[int] = mapped_column(Integer, nullable=False, default=0)

@@ -202,7 +202,7 @@ def run_source_of(run: ToolRun) -> RunSource:
 async def stack_source(db: AsyncSession, stack_id: str, identity: Identity) -> StackSource:
     stack = await db.get(Stack, stack_id)
     # Anonymous callers cannot own a stack — saving requires an account — so
-    # an anonymous identity gets the same answer as a wrong user id.
+    # a caller who does not own the row gets the same answer as a wrong id.
     if stack is None or identity.user is None or stack.user_id != identity.user.id:
         raise NotFound("No stack with that id.")
     return await stack_source_of(db, stack)

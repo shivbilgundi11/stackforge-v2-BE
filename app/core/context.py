@@ -15,7 +15,6 @@ from dataclasses import dataclass, field
 class RequestContext:
     request_id: str = ""
     user_id: str | None = None
-    anonymous_id: str | None = None
     organization_id: str | None = None
     plan: str | None = None
     extra: dict[str, str] = field(default_factory=dict)
@@ -59,8 +58,6 @@ def as_dict() -> dict[str, str]:
     out: dict[str, str] = {"request_id": ctx.request_id}
     if ctx.user_id:
         out["user_id"] = ctx.user_id
-    if ctx.anonymous_id:
-        out["anonymous_id"] = ctx.anonymous_id
     if ctx.organization_id:
         out["organization_id"] = ctx.organization_id
     if ctx.plan:

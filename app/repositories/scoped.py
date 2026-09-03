@@ -16,14 +16,14 @@ Distinguishing them turns any id-taking endpoint into an oracle that confirms
 which ids are real.
 
 **Anonymous identity is scoped too.** A run made before signup belongs to an
-anonymous session, and that session is as much an owner as a user id is.
+single owner column, which is the user that created the row.
 """
 
 from __future__ import annotations
 
 from typing import Any
 
-from sqlalchemy import Select, and_, false, or_, select
+from sqlalchemy import Select, and_, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import DeclarativeBase
 
@@ -64,24 +64,14 @@ async def get_owned[Model: DeclarativeBase](
 def visible_to[Model: DeclarativeBase](
     model: type[Model], identity: Identity
 ) -> Select[tuple[Model]]:
-    """A select scoped to whoever is asking — user *or* anonymous session.
+    """A select scoped to whoever is asking.
 
-    Runs are the case this exists for: they are created before an account
-    exists and claimed on signup, so "the owner" is one of two columns for the
-    life of the row. An identity with neither matches nothing, which is the
-    correct answer rather than an error.
+    This used to fan out over two owner columns — a user id and an anonymous
+    session id — because a run could be created before an account existed and
+    claimed later. There is one owner column now, and the `false()` fallback
+    that guarded the no-identity case went with it: there is no such caller.
     """
-    statement = select(model)
-    if identity.user is not None:
-        return statement.where(model.user_id == identity.user.id)  # type: ignore[attr-defined]
-    if identity.anonymous_id is not None:
-        return statement.where(
-            model.anonymous_session_id == identity.anonymous_id,  # type: ignore[attr-defined]
-        )
-    # No identity at all. An explicit `false()` rather than an unfiltered
-    # query: the failure mode of getting this branch wrong is returning
-    # everyone's rows, so it must be impossible to fall through to one.
-    return statement.where(false())
+    return select(model).where(model.user_id == identity.user.id)  # type: ignore[attr-defined]
 
 
 async def get_visible[Model: DeclarativeBase](
@@ -214,10 +204,7 @@ def set_visibility(row: Any, value: str, member: OrganizationMember | None) -> N
 def owner_columns(identity: Identity) -> dict[str, Any]:
     """The owner fields to write on a new row.
 
-    Exactly one is set, which is what the `exactly_one_owner` check constraint
-    on `tool_runs` enforces. Building them here means no caller can set both
-    and produce a row that vanishes from every per-owner query.
+    One field, since the anonymous tier went — kept as a helper so a new
+    owned table picks up the convention rather than inlining a column name.
     """
-    if identity.user is not None:
-        return {"user_id": identity.user.id, "anonymous_session_id": None}
-    return {"user_id": None, "anonymous_session_id": identity.anonymous_id}
+    return {"user_id": identity.user.id}

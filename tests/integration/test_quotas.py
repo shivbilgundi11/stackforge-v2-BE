@@ -31,11 +31,29 @@ from app.services import feature_service
 from tests.conftest import GOOD_PASSWORD, register_and_verify, set_limit
 
 
-def _identity(plan: Plan | None = None, *, anonymous: bool = False) -> Identity:
-    if anonymous:
-        return Identity(user=None, anonymous_id="anon_test", session_id=None)
+def _identity(plan: Plan | None = None) -> Identity:
+    """A detached caller, for the verdict tests, which never touch the database."""
     user = User(id="usr_test", email="q@example.com", name="Q", plan=plan or Plan.FREE)
-    return Identity(user=user, anonymous_id=None, session_id=None)
+    return Identity(user=user, session_id=None)
+
+
+async def _owner(db: AsyncSession, plan: Plan = Plan.FREE, suffix: str = "") -> Identity:
+    """A caller that exists as a row.
+
+    Anything that *consumes* needs this rather than `_identity`: usage records
+    carry a foreign key to `users`, and before the anonymous tier was removed
+    these tests leaned on an anonymous id, which had no such constraint.
+    """
+    user = User(
+        id=f"usr_owner{suffix}",
+        email=f"owner{suffix}@example.com",
+        name="Owner",
+        password_hash="x",
+        plan=plan,
+    )
+    db.add(user)
+    await db.flush()
+    return Identity(user=user, session_id=None)
 
 
 async def _sign_in(
@@ -70,41 +88,25 @@ def test_every_feature_and_plan_pair_has_the_right_verdict(feature: Feature, pla
     assert verdict.allowed is outranks(plan, spec.minimum_plan)
 
 
-@pytest.mark.parametrize("feature", [spec.key for spec in FEATURES], ids=lambda f: f.value)
-def test_an_anonymous_caller_is_refused_everything_that_needs_an_account(
-    feature: Feature,
-) -> None:
-    from app.data.plans import feature_spec
-
-    spec = feature_spec(feature)
-    verdict = feature_service.can(_identity(anonymous=True), feature)
-
-    assert verdict.allowed is not spec.requires_account
-
-
-def test_an_anonymous_denial_asks_for_an_account_not_a_card() -> None:
-    """Two different walls, two different buttons. Sending someone without an
-    account to a billing page sends them somewhere they cannot act."""
-    verdict = feature_service.can(_identity(anonymous=True), Feature.SAVE_WORK)
-
-    assert isinstance(verdict, feature_service.Deny)
-    assert verdict.requires_account is True
-    assert verdict.required_plan is None
-
-
 def test_a_free_users_denial_names_the_plan_to_buy() -> None:
+    """One wall, one button.
+
+    There used to be two: a caller with no account was denied differently from
+    a caller on the wrong plan, and the dialog branched on it. Every caller has
+    an account now, so a denial always names a plan to buy.
+    """
     verdict = feature_service.can(_identity(Plan.FREE), Feature.EXPORT_PDF)
 
     assert isinstance(verdict, feature_service.Deny)
-    assert verdict.requires_account is False
     assert verdict.required_plan is Plan.PRO
+    assert verdict.as_details() == {"required_plan": "pro"}
 
 
 # ── Rate metrics ────────────────────────────────────────────────────────────
 
 
 async def test_the_last_run_succeeds_and_the_next_one_is_refused(db: AsyncSession) -> None:
-    identity = _identity(anonymous=True)
+    identity = await _owner(db)
     limit = await feature_service.limit_for(db, identity, Metric.TOOL_RUNS_PER_DAY)
     assert limit is not None
 
@@ -126,7 +128,7 @@ async def test_the_last_run_succeeds_and_the_next_one_is_refused(db: AsyncSessio
 async def test_a_refused_run_does_not_permanently_consume_the_day(db: AsyncSession) -> None:
     """The increment is given back, so a burst of rejections at the boundary
     does not push `used` past the limit and make the meter nonsense."""
-    identity = _identity(anonymous=True)
+    identity = await _owner(db)
     limit = await feature_service.limit_for(db, identity, Metric.TOOL_RUNS_PER_DAY)
     assert limit is not None
 
@@ -146,7 +148,7 @@ async def test_an_unlimited_plan_never_refuses_and_is_still_counted(db: AsyncSes
     user = User(id="usr_unlimited", email="pro@example.com", name="Pro", plan=Plan.PRO)
     db.add(user)
     await db.flush()
-    identity = Identity(user=user, anonymous_id=None, session_id=None)
+    identity = Identity(user=user, session_id=None)
 
     for _ in range(50):
         state = await feature_service.consume(db, identity, Metric.TOOL_RUNS_PER_DAY)
@@ -168,7 +170,7 @@ async def test_an_unlimited_plan_never_refuses_and_is_still_counted(db: AsyncSes
 
 
 async def test_the_counter_resets_on_the_period_boundary(db: AsyncSession) -> None:
-    identity = _identity(anonymous=True)
+    identity = await _owner(db)
 
     with time_machine.travel("2026-08-11 23:30:00+00:00", tick=False):
         await feature_service.consume(db, identity, Metric.TOOL_RUNS_PER_DAY)
@@ -183,7 +185,7 @@ async def test_the_counter_resets_on_the_period_boundary(db: AsyncSession) -> No
 
 
 async def test_a_monthly_metric_buckets_by_month(db: AsyncSession) -> None:
-    identity = _identity(anonymous=True)
+    identity = await _owner(db)
 
     with time_machine.travel("2026-08-31 12:00:00+00:00", tick=False):
         state = await feature_service.consume(db, identity, Metric.EXPORTS_PER_MONTH)
@@ -195,20 +197,11 @@ async def test_a_monthly_metric_buckets_by_month(db: AsyncSession) -> None:
         assert (await feature_service.check(db, identity, Metric.EXPORTS_PER_MONTH)).used == 0
 
 
-async def test_anonymous_usage_keys_on_the_session_not_the_ip(db: AsyncSession) -> None:
+async def test_usage_keys_on_the_account_not_the_ip(db: AsyncSession) -> None:
     """Two people behind one office NAT are two users. Keying on the IP would
     make the first of them spend the second's allowance."""
-    from app.core.database import new_id
-    from app.core.database import utcnow as now
-    from app.models.auth import AnonymousSession
-
-    first_id, second_id = new_id("anon"), new_id("anon")
-    db.add(AnonymousSession(id=first_id, last_seen_at=now()))
-    db.add(AnonymousSession(id=second_id, last_seen_at=now()))
-    await db.flush()
-
-    first = Identity(user=None, anonymous_id=first_id, session_id=None)
-    second = Identity(user=None, anonymous_id=second_id, session_id=None)
+    first = await _owner(db, suffix="_one")
+    second = await _owner(db, suffix="_two")
 
     await feature_service.consume(db, first, Metric.TOOL_RUNS_PER_DAY)
     await feature_service.consume(db, first, Metric.TOOL_RUNS_PER_DAY)
@@ -217,7 +210,7 @@ async def test_anonymous_usage_keys_on_the_session_not_the_ip(db: AsyncSession) 
     assert (await feature_service.check(db, second, Metric.TOOL_RUNS_PER_DAY)).used == 0
 
     rows = (
-        (await db.execute(select(UsageRecord).where(UsageRecord.anonymous_session_id == first_id)))
+        (await db.execute(select(UsageRecord).where(UsageRecord.user_id == first.user.id)))
         .scalars()
         .all()
     )
@@ -227,9 +220,16 @@ async def test_anonymous_usage_keys_on_the_session_not_the_ip(db: AsyncSession) 
 async def test_a_usage_row_whose_owner_has_vanished_does_not_fail_the_request(
     db: AsyncSession,
 ) -> None:
-    """A stale `anon_` cookie from a purged session must not turn a routine
-    tool run into a 500 — the durable record is a record, not a gate."""
-    identity = Identity(user=None, anonymous_id="anon_purged_long_ago", session_id=None)
+    """An account deleted between the read and the write must not turn a
+    routine tool run into a 500 — the durable record is a record, not a gate.
+
+    The savepoint around the insert is what makes that true; without it the
+    foreign-key violation poisons the request's transaction.
+    """
+    identity = Identity(
+        user=User(id="usr_gone", email="gone@example.com", name="Gone", plan=Plan.FREE),
+        session_id=None,
+    )
 
     state = await feature_service.consume(db, identity, Metric.TOOL_RUNS_PER_DAY)
 
@@ -291,16 +291,16 @@ async def test_a_downgrade_keeps_every_row_and_only_refuses_the_next_one(
 # ── The meters ──────────────────────────────────────────────────────────────
 
 
-async def test_usage_reports_every_visible_meter_for_an_anonymous_caller(
+async def test_usage_reports_every_visible_meter_for_a_free_account(
     client: AsyncClient,
 ) -> None:
-    """Anonymous is not an error case. The meter is what makes the limit
-    visible before it is hit, which is the only moment a gate converts."""
+    """The meter is what makes the limit visible before it is hit, which is the
+    only moment a gate converts rather than annoys."""
     response = await client.get("/api/v1/billing/usage")
     assert response.status_code == 200
 
     data = response.json()["data"]
-    assert data["plan"] == "anonymous"
+    assert data["plan"] == "free"
     metrics = {quota["metric"] for quota in data["quotas"]}
     assert metrics == {
         "tool_runs_per_day",
@@ -308,8 +308,8 @@ async def test_usage_reports_every_visible_meter_for_an_anonymous_caller(
         "projects",
         "saved_stacks",
         "exports_per_month",
-        # Visible since M21 gave seats members to fill. For an anonymous
-        # caller it reads 0 of 0, and the UI hides a zero-limit meter.
+        # Visible since M21 gave seats members to fill. On Free it reads
+        # 0 of 0, and the UI hides a zero-limit meter.
         "seats",
     }
 
@@ -367,14 +367,14 @@ test_a_plan_change_flips_a_gate_within_one_request = pytest.mark.usefixtures("se
 
 async def test_a_limit_change_takes_effect_without_a_deploy(db: AsyncSession) -> None:
     """M20's headline promise, asserted rather than assumed."""
-    identity = _identity(anonymous=True)
-    await set_limit(db, plan=Plan.FREE, metric=Metric.TOOL_RUNS_PER_DAY, value=1, anonymous=True)
+    identity = await _owner(db)
+    await set_limit(db, plan=Plan.FREE, metric=Metric.TOOL_RUNS_PER_DAY, value=1)
 
     await feature_service.consume(db, identity, Metric.TOOL_RUNS_PER_DAY)
     with pytest.raises(QuotaExceeded):
         await feature_service.consume(db, identity, Metric.TOOL_RUNS_PER_DAY)
 
-    await set_limit(db, plan=Plan.FREE, metric=Metric.TOOL_RUNS_PER_DAY, value=3, anonymous=True)
+    await set_limit(db, plan=Plan.FREE, metric=Metric.TOOL_RUNS_PER_DAY, value=3)
     await feature_service.consume(db, identity, Metric.TOOL_RUNS_PER_DAY)
 
 
@@ -401,16 +401,10 @@ async def test_a_missing_quota_row_denies_rather_than_allowing(db: AsyncSession)
 async def test_reconciliation_reports_an_injected_divergence(db: AsyncSession) -> None:
     """Divergence is logged, never corrected: a drift means the metering is
     wrong, and papering over it removes the only signal that says so."""
-    from app.core.database import new_id
-    from app.core.database import utcnow as now
     from app.core.redis import Keys, get_redis
-    from app.models.auth import AnonymousSession
     from app.workers import billing as billing_jobs
 
-    anon_id = new_id("anon")
-    db.add(AnonymousSession(id=anon_id, last_seen_at=now()))
-    await db.flush()
-    identity = Identity(user=None, anonymous_id=anon_id, session_id=None)
+    identity = await _owner(db)
 
     await feature_service.consume(db, identity, Metric.TOOL_RUNS_PER_DAY)
     await feature_service.consume(db, identity, Metric.TOOL_RUNS_PER_DAY)
@@ -420,7 +414,7 @@ async def test_reconciliation_reports_an_injected_divergence(db: AsyncSession) -
 
     # Lose a counter, the way an eviction or a restart would.
     period, _, _ = feature_service.period_for(Metric.TOOL_RUNS_PER_DAY)
-    await get_redis().delete(Keys.quota(Metric.TOOL_RUNS_PER_DAY.value, anon_id, period))
+    await get_redis().delete(Keys.quota(Metric.TOOL_RUNS_PER_DAY.value, identity.user.id, period))
 
     drifted = await billing_jobs.reconcile_usage(db, metric=Metric.TOOL_RUNS_PER_DAY)
     assert not drifted.ok

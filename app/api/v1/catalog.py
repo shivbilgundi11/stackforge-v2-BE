@@ -240,6 +240,6 @@ async def flag_catalog_entry(db: Db, identity: CallerIdentity, payload: FlagIn) 
         entity_type=payload.entity_type,
         entity_id=payload.entity_id,
         field=payload.field,
-        authenticated=identity.is_authenticated,
+        user_id=identity.user.id,
     )
     return ok(FlagOut.model_validate(flag))

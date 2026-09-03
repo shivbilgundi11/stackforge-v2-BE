@@ -7,7 +7,6 @@ table nobody noticed was missing.
 
 from app.models.ai import AiCall, AiOutcome
 from app.models.auth import (
-    AnonymousSession,
     AuthEvent,
     AuthEventType,
     AuthOutcome,
@@ -68,7 +67,6 @@ from app.models.user import Plan, PlanSource, User, UserRole
 __all__ = [
     "AiCall",
     "AiOutcome",
-    "AnonymousSession",
     "Approval",
     "ApprovalStatus",
     "AuthEvent",

@@ -148,10 +148,10 @@ async def _identity_of(session: AsyncSession, export: Export) -> Identity:
     """
     from app.services import auth_service
 
-    if export.user_id is not None:
-        user = await auth_service.get_user(session, export.user_id)
-        return Identity(user=user, anonymous_id=None, session_id=None)
-    return Identity(user=None, anonymous_id=export.anonymous_session_id, session_id=None)
+    user = await auth_service.get_user(session, export.user_id)
+    if user is None:  # pragma: no cover — the FK cascades, so this cannot happen
+        raise LookupError(f"export {export.id} has no owner")
+    return Identity(user=user, session_id=None)
 
 
 async def purge_expired_exports(_context: dict[str, Any]) -> int:

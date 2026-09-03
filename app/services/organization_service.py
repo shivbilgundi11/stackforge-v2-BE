@@ -78,7 +78,7 @@ def settings_of(org: Organization) -> OrgSettings:
 
 
 def _identity(user: User) -> Identity:
-    return Identity(user=user, anonymous_id=None, session_id=None)
+    return Identity(user=user, session_id=None)
 
 
 # ── Membership resolution ────────────────────────────────────────────────────
@@ -385,7 +385,6 @@ async def seat_limit(db: AsyncSession, org: Organization) -> int | None:
     floor = await db.scalar(
         select(PlanQuota.limit_value).where(
             PlanQuota.plan == org.plan,
-            PlanQuota.anonymous.is_(False),
             PlanQuota.metric == Metric.SEATS,
         )
     )

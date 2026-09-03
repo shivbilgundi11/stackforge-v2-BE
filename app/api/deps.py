@@ -15,7 +15,6 @@ from fastapi import Depends, Request, Response
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core import rate_limit
-from app.core.config import settings
 from app.core.context import bind
 from app.core.database import get_session
 from app.core.errors import (
@@ -39,29 +38,26 @@ PLAN_RANK = {Plan.FREE: 0, Plan.PRO: 1, Plan.TEAM: 2, Plan.ENTERPRISE: 3}
 
 @dataclass(frozen=True)
 class Identity:
-    """A caller. Either a signed-in user or an anonymous session, never both.
+    """A caller. Always a signed-in user.
 
-    Quota, rate limiting, and run logging key on `key`, so none of them has to
-    branch on which kind of caller they have.
+    There used to be a second kind — an anonymous session keyed on a cookie —
+    and `Identity` existed so quota, rate limiting, and run logging did not
+    each have to branch on which they had. The anonymous tier is gone: every
+    surface requires an account, so the union has collapsed to one member. The
+    wrapper stays because `key` and `plan` are read in a few dozen places, and
+    because it carries `session_id`, which the user row does not.
     """
 
-    user: User | None
-    anonymous_id: str | None
+    user: User
     session_id: str | None
 
     @property
-    def is_authenticated(self) -> bool:
-        return self.user is not None
-
-    @property
     def key(self) -> str:
-        if self.user:
-            return self.user.id
-        return self.anonymous_id or "unknown"
+        return self.user.id
 
     @property
     def plan(self) -> Plan:
-        return self.user.plan if self.user else Plan.FREE
+        return self.user.plan
 
 
 def request_meta(request: Request) -> auth_service.RequestMeta:
@@ -109,72 +105,21 @@ async def get_current_user_optional(request: Request, db: Db) -> User | None:
 
 
 async def get_identity(request: Request, db: Db) -> Identity:
-    """User, else anonymous session, else anonymous-without-a-cookie."""
-    user = await get_current_user_optional(request, db)
-    if user is not None:
-        return Identity(
-            user=user,
-            anonymous_id=None,
-            session_id=getattr(request.state, "session_id", None),
-        )
+    """The caller, or 401.
 
-    anon_id = request.cookies.get(settings.anon_cookie_name)
-    if anon_id:
-        bind(anonymous_id=anon_id)
-    return Identity(user=None, anonymous_id=anon_id, session_id=None)
-
-
-def set_anon_cookie(response: Response, anon_id: str) -> None:
-    """Path `/`, so every tool endpoint sees it — unlike the refresh cookie,
-    which is deliberately scoped to `/api/v1/auth`."""
-    response.set_cookie(
-        settings.anon_cookie_name,
-        anon_id,
-        max_age=30 * 86_400,
-        httponly=True,
-        secure=settings.cookie_secure,
-        samesite="lax",
-        path="/",
-        domain=settings.cookie_domain,
-    )
-
-
-async def get_run_identity(
-    request: Request, response: Response, db: Db, meta: RequestMeta
-) -> Identity:
-    """Like `get_identity`, but guarantees an owner.
-
-    Every `tool_runs` row must belong to exactly one user or anonymous session
-    — a check constraint enforces it, because orphan rows vanish from
-    per-user queries while still inflating the totals. A caller arriving with
-    no cookie at all is normal (a shared link, a cold first request, a curl),
-    so rather than reject them this mints an anonymous session and sets the
-    cookie, and the work becomes claimable if they sign up later.
-
-    Also revalidates the cookie against the database: a stale `anon_` id from
-    a purged session would otherwise fail the foreign key at insert time,
-    turning a routine request into a 409.
+    Everything that used to be reachable without an account now sits behind
+    `AuthGuard` on the web side and behind this on the API side, so there is no
+    longer a "no identity" branch to fall through to.
     """
-    user = await get_current_user_optional(request, db)
-    if user is not None:
-        return Identity(
-            user=user,
-            anonymous_id=None,
-            session_id=getattr(request.state, "session_id", None),
-        )
+    user = await get_current_user(request, db)
+    return Identity(user=user, session_id=getattr(request.state, "session_id", None))
 
-    anon_id = request.cookies.get(settings.anon_cookie_name)
-    if anon_id:
-        existing = await auth_service.get_anonymous_session(db, anon_id)
-        if existing is not None:
-            bind(anonymous_id=existing.id)
-            return Identity(user=None, anonymous_id=existing.id, session_id=None)
 
-    record = await auth_service.create_anonymous_session(db, meta=meta)
-    set_anon_cookie(response, record.id)
-    bind(anonymous_id=record.id)
-    return Identity(user=None, anonymous_id=record.id, session_id=None)
-
+#: Was distinct from `get_identity` while a tool run could be owned by an
+#: anonymous session that had to be minted on the spot. Both now mean "a
+#: signed-in caller"; the alias survives so the ~50 route signatures reading
+#: `RunIdentity` still say what kind of endpoint they are.
+get_run_identity = get_identity
 
 RunIdentity = Annotated[Identity, Depends(get_run_identity)]
 
@@ -235,9 +180,8 @@ def require_feature(feature: Feature) -> object:
     tier, so moving PDF export from Pro to Team is one edit in `data/plans.py`
     instead of a search for `require_plan(Plan.PRO)` across the routers.
 
-    Unlike `require_plan` this accepts an anonymous caller, because some
-    features are open to one — the verdict, including "you need an account
-    rather than a bigger plan", comes from `FeatureService`.
+    The verdict itself comes from `FeatureService`, never from a plan
+    comparison written here.
     """
 
     async def dependency(identity: CallerIdentity) -> Identity:
@@ -360,27 +304,20 @@ OrgOwner = Annotated[OrgContext, require_org_role(OrgRole.OWNER)]
 # ── Rate limiting (M23) ─────────────────────────────────────────────────────
 
 
-def _rate_limit_key(identity: Identity, request: Request) -> str:
-    """`user_id` → `anon_id` → IP, in that order.
+def _rate_limit_key(user: User | None, request: Request) -> str:
+    """`user_id`, else IP.
 
     Identity before IP because IP-keyed limits break behind corporate NAT and
     shared Wi-Fi, which is where a good share of this audience works — one
     office would share a single allowance (D-14 makes the same argument for
-    quota). IP is the last resort for a caller with neither, which in practice
-    means an endpoint reached before a session cookie exists.
+    quota). The middle rung, an anonymous session id, went with the tier.
 
-    **Known limit of this precedence.** Anonymous sessions are free to mint,
-    so a client that discards its cookie is a new identity with a fresh
-    allowance. That is inherent to keying on identity ahead of IP, and it is
-    the same hole the anonymous *quota* has had since D-14 — which accepted it
-    knowingly, because an IP-keyed allowance shared by everyone in one office
-    is the worse failure. Closing it means proof-of-work or an account, not a
-    different key here.
+    IP is not a leftover: `/s/{token}` and the identity probe are reachable
+    without a session by design, and they are keyed the only way a caller with
+    no account can be.
     """
-    if identity.user:
-        return f"u:{identity.user.id}"
-    if identity.anonymous_id:
-        return f"a:{identity.anonymous_id}"
+    if user is not None:
+        return f"u:{user.id}"
     return f"ip:{_client_ip(request)}"
 
 
@@ -408,18 +345,16 @@ def rate_limited(klass: rate_limit.RateLimitClass) -> Callable[..., Awaitable[No
     the payment webhooks must not be limited, and a middleware would need a
     path allow-list that drifts from the routes it names.
 
-    Keyed on `CallerIdentity`, never `RunIdentity`. The latter *mints* an
-    anonymous session and sets a cookie when there is none — which is correct
-    before a tool run that has to be attributed, and quite wrong as a side
-    effect of counting a request. Applied to a read router it would hand a
-    session cookie to every crawler that touches a public share link.
+    Keyed on `OptionalUser`, never `CallerIdentity`: the latter is a 401 for a
+    caller with no session, and applying it here would put the whole shares
+    router — including the public `/s/{token}` — behind the door.
     """
 
-    async def enforce(request: Request, response: Response, identity: CallerIdentity) -> None:
+    async def enforce(request: Request, response: Response, user: OptionalUser) -> None:
         decision = await rate_limit.check(
             klass,
-            identity_key=_rate_limit_key(identity, request),
-            plan=identity.plan if identity.is_authenticated else None,
+            identity_key=_rate_limit_key(user, request),
+            plan=user.plan if user else None,
         )
         if decision is None:
             return

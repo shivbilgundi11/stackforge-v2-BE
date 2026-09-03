@@ -236,7 +236,6 @@ async def test_a_changed_limit_changes_the_pricing_page(
         select(PlanQuota).where(
             PlanQuota.plan == Plan.FREE,
             PlanQuota.metric == Metric.TOOL_RUNS_PER_DAY,
-            PlanQuota.anonymous.is_(False),
         )
     )
     assert row is not None
@@ -427,8 +426,10 @@ async def test_checkout_without_razorpay_configured_is_refused_clearly(
     assert response.json()["error"]["details"]["reason"] == "billing_not_configured"
 
 
-async def test_checkout_requires_an_account(client: AsyncClient, razorpay: FakeRazorpay) -> None:
-    assert (await client.post(CHECKOUT, json={"plan": "pro"})).status_code == 401
+async def test_checkout_requires_an_account(
+    anon_client: AsyncClient, razorpay: FakeRazorpay
+) -> None:
+    assert (await anon_client.post(CHECKOUT, json={"plan": "pro"})).status_code == 401
 
 
 async def test_seats_are_refused_on_a_plan_that_is_not_per_seat(

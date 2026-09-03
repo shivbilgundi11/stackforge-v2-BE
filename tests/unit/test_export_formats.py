@@ -25,11 +25,9 @@ from app.services import export_service, pdf_service
 from tests.unit.test_artifact_generators import run_source, stack_source
 
 
-def identity(plan: Plan = Plan.FREE, *, anonymous: bool = False) -> Identity:
-    if anonymous:
-        return Identity(user=None, anonymous_id="anon_test", session_id=None)
+def identity(plan: Plan = Plan.FREE) -> Identity:
     user = User(id="usr_test", email="ada@example.com", plan=plan)
-    return Identity(user=user, anonymous_id=None, session_id=None)
+    return Identity(user=user, session_id=None)
 
 
 def render(source, export_format: ExportFormat, **kwargs):  # type: ignore[no-untyped-def]
@@ -46,9 +44,9 @@ def test_markdown_is_free_and_every_other_format_is_pro() -> None:
             assert export_service.required_plan(export_format) is Plan.PRO
 
 
-def test_an_anonymous_caller_can_export_markdown() -> None:
-    """Running and exporting are free; *keeping* is what the account is for."""
-    export_service.assert_allowed(ExportFormat.MARKDOWN, identity(anonymous=True))
+def test_a_free_account_can_export_markdown() -> None:
+    """Markdown is on every plan. The paid formats are what an upgrade buys."""
+    export_service.assert_allowed(ExportFormat.MARKDOWN, identity(Plan.FREE))
 
 
 def test_a_free_user_asking_for_pdf_gets_the_upgrade_details() -> None:
@@ -56,25 +54,14 @@ def test_a_free_user_asking_for_pdf_gets_the_upgrade_details() -> None:
         export_service.assert_allowed(ExportFormat.PDF, identity(Plan.FREE))
 
     assert raised.value.http_status == 402
+    # One wall, one button. `requires_account` used to ride alongside
+    # `required_plan` for callers with no account; every caller has one now, so
+    # a denial is always an upgrade.
     assert raised.value.details == {
         "required_plan": "pro",
         "current_plan": "free",
-        # M20: the dialog branches on this to offer signup rather than a
-        # billing page. False here — this caller has an account, just not the
-        # plan.
-        "requires_account": False,
         "format": "pdf",
     }
-
-
-def test_an_anonymous_caller_asking_for_pdf_is_told_to_sign_up_first() -> None:
-    """Two different walls, two different buttons. Sending someone without an
-    account to a billing page is sending them to a page they cannot use."""
-    with pytest.raises(PlanRequired) as raised:
-        export_service.assert_allowed(ExportFormat.PDF, identity(anonymous=True))
-
-    assert raised.value.details is not None
-    assert raised.value.details["requires_account"] is True
 
 
 def test_a_team_plan_clears_a_pro_gate() -> None:

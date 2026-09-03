@@ -142,7 +142,7 @@ async def test_an_export_is_ready_and_downloadable_in_one_round_trip(
     assert b"# Stack architecture" in downloaded.content
 
 
-async def test_an_anonymous_visitor_can_export_markdown(client: AsyncClient) -> None:
+async def test_a_free_account_can_export_markdown(client: AsyncClient) -> None:
     run_id = await _a_run(client)
 
     created = await client.post(
@@ -462,11 +462,16 @@ async def test_sharing_an_artifact_the_source_cannot_produce_is_refused(
     assert response.status_code == 404
 
 
-async def test_sharing_requires_an_account(client: AsyncClient) -> None:
-    """An anonymous visitor cannot revoke later, and revocation is the only
-    protection that survives forwarding."""
-    response = await client.post(
-        SHARES, json={"target_type": "run", "target_id": await _a_run(client)}
+async def test_sharing_requires_an_account(anon_client: AsyncClient) -> None:
+    """A caller with no session cannot revoke later, and revocation is the only
+    protection that survives forwarding.
+
+    Every route needs an account now, so this is no longer the *first* gate a
+    sharer meets — but it is still the one that matters, and a share endpoint
+    that ever stopped checking would be the worst possible place to find out.
+    """
+    response = await anon_client.post(
+        SHARES, json={"target_type": "run", "target_id": "run_whatever"}
     )
     assert response.status_code == 401
 

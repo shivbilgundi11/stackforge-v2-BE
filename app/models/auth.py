@@ -125,31 +125,6 @@ class OAuthAccount(Base, TimestampMixin):
     )
 
 
-class AnonymousSession(Base, TimestampMixin):
-    """Anonymous identity.
-
-    The product allows 5 tool runs a day without an account, and the funnel
-    depends on it. That needs an identity: IP-keyed quota breaks behind
-    corporate NAT and shared Wi-Fi, which is where much of this audience works.
-
-    Claimed on signup — turning "I already did the work here" into a reason to
-    create an account is the highest-intent conversion moment the product has.
-    """
-
-    __tablename__ = "anonymous_sessions"
-
-    id: Mapped[str] = mapped_column(String(64), primary_key=True, default=lambda: new_id("anon"))
-    ip: Mapped[str | None] = mapped_column(INET)
-    user_agent: Mapped[str | None] = mapped_column(Text)
-    last_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
-    claimed_by_user_id: Mapped[str | None] = mapped_column(
-        String(64), ForeignKey("users.id", ondelete="SET NULL")
-    )
-    claimed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
-
-    __table_args__ = (Index("ix_anonymous_sessions_claimed_by_user_id", "claimed_by_user_id"),)
-
-
 class AuthEventType(str, enum.Enum):
     REGISTER = "register"
     LOGIN = "login"
@@ -167,6 +142,8 @@ class AuthEventType(str, enum.Enum):
     SESSION_REVOKED = "session_revoked"
     ACCOUNT_LOCKED = "account_locked"
     ACCOUNT_DELETED = "account_deleted"
+    #: Historical. The anonymous tier is gone, but rows written while it
+    #: existed still carry this value and the Postgres enum still holds it.
     ANONYMOUS_CLAIMED = "anonymous_claimed"
 
 
@@ -185,7 +162,6 @@ class AuthEvent(Base):
     user_id: Mapped[str | None] = mapped_column(
         String(64), ForeignKey("users.id", ondelete="SET NULL")
     )
-    anonymous_session_id: Mapped[str | None] = mapped_column(String(64))
     event: Mapped[AuthEventType] = mapped_column(
         Enum(AuthEventType, name="auth_event_type", values_callable=lambda e: [m.value for m in e]),
         nullable=False,

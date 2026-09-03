@@ -1,7 +1,8 @@
 """Stack Architect endpoints (M15).
 
-`/recommend` is **public**. An anonymous visitor gets one full recommendation
-per the anonymous tool quota, because the product's strongest demo is the
+`/recommend` needs an account like every other tool route. A new free account
+gets a full recommendation inside its daily allowance, because the product's
+strongest demo is the
 product working — gating it behind signup trades the best conversion moment
 for a smaller one. Saving requires an account, and that is the conversion
 moment.

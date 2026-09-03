@@ -98,11 +98,9 @@ async def list_plans(db: Db, identity: CallerIdentity) -> dict[str, Any]:
                 # A plan with no price configured cannot be bought here, however
                 # much the copy would like to sell it.
                 checkout=spec.checkout and _has_price(spec.plan),
-                current=identity.is_authenticated and identity.plan is spec.plan,
+                current=identity.plan is spec.plan,
                 included=(
-                    identity.is_authenticated
-                    and identity.plan is not spec.plan
-                    and plan_data.outranks(identity.plan, spec.plan)
+                    identity.plan is not spec.plan and plan_data.outranks(identity.plan, spec.plan)
                 ),
                 features=[
                     PlanFeatureOut(
@@ -132,13 +130,8 @@ def _has_price(plan: Plan) -> bool:
 
 
 async def _limits_by_plan(db: AsyncSession) -> dict[Plan, dict[Metric, int | None]]:
-    """The registered-account limits, per plan.
-
-    The anonymous rows are deliberately excluded: they are a rate-limiting
-    decision, not a plan being sold, and listing them on a pricing page would
-    advertise how much can be had without signing up.
-    """
-    rows = (await db.execute(select(PlanQuota).where(PlanQuota.anonymous.is_(False)))).scalars()
+    """The limits, per plan."""
+    rows = (await db.execute(select(PlanQuota))).scalars()
     out: dict[Plan, dict[Metric, int | None]] = {}
     for row in rows:
         out.setdefault(row.plan, {})[row.metric] = row.limit_value
@@ -185,16 +178,15 @@ async def select_plan(db: Db, user: CurrentUser, payload: PlanSelectionIn) -> di
 
 @router.get("/usage", response_model=Envelope[UsageSummaryOut], name="get_usage")
 async def get_usage(db: Db, identity: CallerIdentity) -> dict[str, Any]:
-    """Every meter, for an anonymous caller as much as a paying one.
+    """Every meter, for a free account as much as a paying one.
 
-    Anonymous is not an error case here. They are metered too, and the sidebar
-    meter is the thing that makes the limit visible before it is hit — which is
+    The sidebar meter is what makes a limit visible before it is hit, which is
     the only moment the gate can convert rather than annoy.
     """
     states = [await feature_service.check(db, identity, metric) for metric in VISIBLE_METRICS]
     return ok(
         UsageSummaryOut(
-            plan=identity.plan.value if identity.is_authenticated else "anonymous",
+            plan=identity.plan.value,
             quotas=[state.to_schema() for state in states],
         )
     )

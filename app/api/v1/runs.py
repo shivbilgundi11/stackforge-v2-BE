@@ -123,7 +123,7 @@ def _envelope(run: Any) -> ToolRunOut:
 async def save_run(db: Db, identity: CallerIdentity, run_id: str) -> dict[str, Any]:
     """Keep this run past the 30-day purge.
 
-    Requires an account. Running and exporting are free and anonymous;
+    Saving is what an account is for. Running and exporting are free;
     *keeping* is what the account is for, and asking at this moment is asking
     someone who has already decided the result is worth something.
     """

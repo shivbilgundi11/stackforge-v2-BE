@@ -19,6 +19,7 @@ from app.core.redis import get_redis
 from app.models.tool_run import ToolRun
 from app.services import feature_service, tool_service
 from app.services.tool_service import RUN_METRIC
+from tests.conftest import sign_in
 
 pytestmark = pytest.mark.usefixtures("seeded_catalog")
 
@@ -94,85 +95,51 @@ async def test_a_run_writes_a_row_with_input_output_and_duration(
     assert run.saved is False
 
 
-async def test_an_anonymous_run_is_attributed_to_the_anon_session(
+async def test_a_run_is_attributed_to_the_account_that_made_it(
     client: AsyncClient, db: AsyncSession
 ) -> None:
-    from app.core.config import settings
-    from app.core.database import new_id, utcnow
-    from app.models.auth import AnonymousSession
+    """One owner column, NOT NULL.
 
-    anon_id = new_id("anon")
-    db.add(AnonymousSession(id=anon_id, last_seen_at=utcnow()))
-    await db.flush()
+    This used to be two nullable columns held to exactly one by a check
+    constraint, because a run could belong to an anonymous session instead. The
+    tier is gone and so is the union.
+    """
+    from app.models.user import User
 
-    client.cookies.set(settings.anon_cookie_name, anon_id)
-    try:
-        response = await client.post(PRICING, json=BASE_PAYLOAD)
-    finally:
-        client.cookies.delete(settings.anon_cookie_name)
+    response = await client.post(PRICING, json=BASE_PAYLOAD)
 
     run = await db.get(ToolRun, response.json()["data"]["run_id"])
     assert run is not None
-    assert run.anonymous_session_id == anon_id
-    assert run.user_id is None
+    owner = await db.get(User, run.user_id)
+    assert owner is not None
+    assert owner.email == "ada@example.com"
 
 
-async def test_anonymous_runs_are_claimed_on_signup(db: AsyncSession) -> None:
-    """Losing four calculations at the moment of signing up teaches the user
-    that creating an account cost them something."""
-    from app.core.database import new_id, utcnow
-    from app.models.auth import AnonymousSession
-    from app.models.user import User
+async def test_a_run_needs_a_session(anon_client: AsyncClient) -> None:
+    """The front door. Every tool route is behind it."""
+    response = await anon_client.post(PRICING, json=BASE_PAYLOAD)
 
-    anon_id = new_id("anon")
-    db.add(AnonymousSession(id=anon_id, last_seen_at=utcnow()))
-    user = User(
-        id=new_id("usr"),
-        email="claimer@example.com",
-        password_hash="x",
-        name="Claimer",
-    )
-    db.add(user)
-    await db.flush()
-
-    for _ in range(3):
-        db.add(
-            ToolRun(
-                id=new_id("run"),
-                tool_slug="llm-pricing",
-                workflow="cost",
-                anonymous_session_id=anon_id,
-                input={},
-                output={},
-                duration_ms=1,
-                created_at=utcnow(),
-            )
-        )
-    await db.flush()
-
-    claimed = await tool_service.claim_anonymous_runs(db, anonymous_id=anon_id, user_id=user.id)
-    await db.flush()
-
-    assert claimed == 3
-    rows = (await db.execute(select(ToolRun).where(ToolRun.user_id == user.id))).scalars().all()
-    assert len(rows) == 3
-    assert all(row.anonymous_session_id is None for row in rows)
+    assert response.status_code == 401
+    assert response.json()["error"]["code"] == "UNAUTHENTICATED"
 
 
 # ── Quota ────────────────────────────────────────────────────────────────────
 
 
-async def _anonymous_run_limit(db: AsyncSession) -> int:
-    """The anonymous allowance, read from `plan_quotas` rather than a constant.
+async def _free_run_limit(db: AsyncSession) -> int:
+    """The free allowance, read from `plan_quotas` rather than a constant.
 
     The limit moved into the table in M20 precisely so it could be changed
-    without a deploy; a test that hardcoded 5 would have to be edited every
+    without a deploy; a test that hardcoded 25 would have to be edited every
     time the number is tuned, which is the coupling the table removed.
     """
-    limit = await feature_service.limit_for(
-        db, Identity(user=None, anonymous_id="anon_probe", session_id=None), RUN_METRIC
+    from app.models.user import Plan, User
+
+    probe = Identity(
+        user=User(id="usr_probe", email="probe@example.com", plan=Plan.FREE), session_id=None
     )
-    assert limit is not None, "the anonymous tier must be capped"
+    limit = await feature_service.limit_for(db, probe, RUN_METRIC)
+    assert limit is not None, "the free tier must be capped"
     return limit
 
 
@@ -181,7 +148,7 @@ async def test_quota_returns_402_at_the_limit_with_real_numbers(
     db: AsyncSession,
 ) -> None:
     """ "You hit your limit" with no figures is a dead end."""
-    limit = await _anonymous_run_limit(db)
+    limit = await _free_run_limit(db)
 
     for _ in range(limit):
         assert (await client.post(PRICING, json=BASE_PAYLOAD)).status_code == 200
@@ -199,14 +166,14 @@ async def test_quota_returns_402_at_the_limit_with_real_numbers(
 
 
 async def test_below_the_limit_returns_200(client: AsyncClient, db: AsyncSession) -> None:
-    for _ in range(await _anonymous_run_limit(db) - 1):
+    for _ in range(await _free_run_limit(db) - 1):
         assert (await client.post(PRICING, json=BASE_PAYLOAD)).status_code == 200
 
 
 async def test_a_blocked_run_is_not_logged(client: AsyncClient, db: AsyncSession) -> None:
     """The quota check happens before compute, so a rejected call costs nothing
     and leaves no row to skew the metrics."""
-    for _ in range(await _anonymous_run_limit(db)):
+    for _ in range(await _free_run_limit(db)):
         await client.post(PRICING, json=BASE_PAYLOAD)
 
     before = len((await db.execute(select(ToolRun))).scalars().all())
@@ -222,7 +189,7 @@ async def test_quota_is_readable_before_running_anything(client: AsyncClient) ->
 
     assert quota["used"] == 0
     assert quota["remaining"] == quota["limit"]
-    assert quota["plan"] == "anonymous"
+    assert quota["plan"] == "free"
 
 
 async def test_quota_fails_open_when_redis_is_unavailable(db: AsyncSession) -> None:
@@ -236,16 +203,18 @@ async def test_quota_fails_open_when_redis_is_unavailable(db: AsyncSession) -> N
         async def incrby(self, *_: object, **__: object) -> None:
             raise OSError("redis is down")
 
+    from app.models.user import Plan, User
+
+    caller = Identity(
+        user=User(id="usr_broken", email="broken@example.com", plan=Plan.FREE), session_id=None
+    )
+
     set_redis(_Broken())  # type: ignore[arg-type]
     try:
-        state = await tool_service.check_quota(
-            db, Identity(user=None, anonymous_id="anon_x", session_id=None)
-        )
+        state = await tool_service.check_quota(db, caller)
         # And the enforcing path allows rather than refusing: an unreadable
         # counter reads as zero used, which is the whole point of failing open.
-        await tool_service.consume_quota(
-            db, Identity(user=None, anonymous_id="anon_x", session_id=None)
-        )
+        await tool_service.consume_quota(db, caller)
     finally:
         set_redis(None)
 
@@ -290,20 +259,11 @@ async def test_one_chip_per_source_not_one_per_row(client: AsyncClient) -> None:
 
 
 async def test_recent_runs_are_listed_for_the_caller(client: AsyncClient) -> None:
-    from app.core.config import settings
-    from app.core.database import new_id
-
-    anon_id = new_id("anon")
-    client.cookies.set(settings.anon_cookie_name, anon_id)
-    try:
-        # No AnonymousSession row: the FK is nullable-on-delete and an
-        # unregistered cookie should not 500 the endpoint.
-        await client.post(PRICING, json=BASE_PAYLOAD)
-        listed = await client.get("/api/v1/runs")
-    finally:
-        client.cookies.delete(settings.anon_cookie_name)
+    await client.post(PRICING, json=BASE_PAYLOAD)
+    listed = await client.get("/api/v1/runs")
 
     assert listed.status_code == 200
+    assert [run["tool_slug"] for run in listed.json()["data"]] == ["llm-pricing"]
 
 
 async def test_a_reopened_run_keeps_its_provenance(client: AsyncClient) -> None:
@@ -361,26 +321,13 @@ async def test_a_run_is_not_readable_by_another_caller(
     client: AsyncClient, db: AsyncSession
 ) -> None:
     """A run id is not a capability. Sharing is M18's job."""
-    from app.core.config import settings
-    from app.core.database import new_id, utcnow
-    from app.models.auth import AnonymousSession
-
-    owner = new_id("anon")
-    db.add(AnonymousSession(id=owner, last_seen_at=utcnow()))
-    await db.flush()
-
-    client.cookies.set(settings.anon_cookie_name, owner)
     run_id = (await client.post(PRICING, json=BASE_PAYLOAD)).json()["data"]["run_id"]
     assert (await client.get(f"/api/v1/runs/{run_id}")).status_code == 200
 
-    other = new_id("anon")
-    db.add(AnonymousSession(id=other, last_seen_at=utcnow()))
-    await db.flush()
-    client.cookies.set(settings.anon_cookie_name, other)
-    try:
-        assert (await client.get(f"/api/v1/runs/{run_id}")).status_code == 404
-    finally:
-        client.cookies.delete(settings.anon_cookie_name)
+    # A second account on the same client — the header is overwritten, so this
+    # is a different caller asking for the first one's work.
+    await sign_in(client, db, email="stranger@example.com")
+    assert (await client.get(f"/api/v1/runs/{run_id}")).status_code == 404
 
 
 # ── Validation ───────────────────────────────────────────────────────────────
@@ -666,18 +613,16 @@ async def test_quota_limits_are_ordered_by_plan(db: AsyncSession) -> None:
         await db.execute(select(PlanQuota).where(PlanQuota.metric == Metric.TOOL_RUNS_PER_DAY))
     ).scalars()
     # `None` is unlimited, so it sorts above every real number.
-    limits = {(row.plan, row.anonymous): row.limit_value for row in rows}
+    limits = {row.plan: row.limit_value for row in rows}
     ordered = [
-        limits[(Plan.FREE, True)],
-        limits[(Plan.FREE, False)],
-        limits[(Plan.PRO, False)],
-        limits[(Plan.TEAM, False)],
-        limits[(Plan.ENTERPRISE, False)],
+        limits[Plan.FREE],
+        limits[Plan.PRO],
+        limits[Plan.TEAM],
+        limits[Plan.ENTERPRISE],
     ]
 
     ranked = [float("inf") if value is None else value for value in ordered]
     assert ranked == sorted(ranked), f"a cheaper plan allows more: {ordered}"
-    assert ranked[0] < ranked[1], "signing up must buy more than staying anonymous"
 
 
 def test_metric_decimals_serialise_as_strings() -> None:

@@ -185,7 +185,14 @@ def outbox() -> AsyncIterator[email_integration.ConsoleSender]:
 
 
 @pytest_asyncio.fixture(loop_scope="session")
-async def client(db: AsyncSession) -> AsyncIterator[AsyncClient]:
+async def anon_client(db: AsyncSession) -> AsyncIterator[AsyncClient]:
+    """A caller with no session.
+
+    Only for the routes that are reachable without one — register, login,
+    reset, the identity probe, public share links — and for asserting that
+    everything else answers 401. Every other test wants `client`.
+    """
+
     async def override() -> AsyncIterator[AsyncSession]:
         # Mirrors production get_session: commit on success, roll back on
         # error. Exercising the same commit path is the point — a test that
@@ -208,6 +215,23 @@ async def client(db: AsyncSession) -> AsyncIterator[AsyncClient]:
     app.dependency_overrides.clear()
 
 
+@pytest_asyncio.fixture(loop_scope="session")
+async def client(anon_client: AsyncClient, db: AsyncSession) -> AsyncClient:
+    """The default caller: registered, verified, on the free plan.
+
+    Signed in by default because the product is. Every route outside the auth
+    surface requires an account, so an unauthenticated client would make three
+    hundred tests assert 401 and nothing else. A test that wants the closed
+    door asks for `anon_client` and says so.
+
+    The account is a real row created through the API, not a fixture object
+    poked into the session — quota, run attribution, and export ownership all
+    key on it, and a detached `User` would satisfy none of their foreign keys.
+    """
+    await sign_in(anon_client, db)
+    return anon_client
+
+
 # ── Helpers ─────────────────────────────────────────────────────────────────
 
 GOOD_PASSWORD = "Correct-horse-battery-staple-42!"
@@ -228,7 +252,6 @@ async def set_limit(
     plan: object,
     metric: object,
     value: int | None,
-    anonymous: bool = False,
 ) -> None:
     """Change one quota, the way an operator would (M20).
 
@@ -248,7 +271,6 @@ async def set_limit(
             select(PlanQuota).where(
                 PlanQuota.plan == plan,
                 PlanQuota.metric == metric,
-                PlanQuota.anonymous.is_(anonymous),
             )
         )
     ).scalar_one()
@@ -278,3 +300,22 @@ async def register_and_verify(
     user.email_verified_at = utcnow()
     await db.flush()
     return user.id
+
+
+async def sign_in(
+    client: AsyncClient,
+    db: AsyncSession,
+    email: str = "ada@example.com",
+    password: str = GOOD_PASSWORD,
+) -> str:
+    """Register, verify, log in, and leave the token on the client.
+
+    Returns the user id. Callers that need a *second* account in the same test
+    pass a different address; the header is overwritten, so the client is
+    whoever signed in last.
+    """
+    user_id = await register_and_verify(client, db, email=email, password=password)
+    response = await client.post("/api/v1/auth/login", json={"email": email, "password": password})
+    token = response.json()["data"]["tokens"]["access_token"]
+    client.headers["Authorization"] = f"Bearer {token}"
+    return user_id

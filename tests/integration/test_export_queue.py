@@ -85,7 +85,7 @@ async def test_a_bundle_over_the_threshold_is_built_when_the_queue_is_down(
     stack = await db.get(Stack, await _a_stack(client))
     assert stack is not None
 
-    identity = Identity(user=user, anonymous_id=None, session_id=None)
+    identity = Identity(user=user, session_id=None)
     source = await sources.stack_source_of(db, stack)
 
     original = settings.export_async_threshold_bytes

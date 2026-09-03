@@ -127,7 +127,6 @@ def assert_allowed(export_format: ExportFormat, identity: Identity) -> None:
         details={
             "required_plan": minimum.value,
             "current_plan": identity.plan.value,
-            "requires_account": not identity.is_authenticated,
             "format": export_format.value,
         },
     )
@@ -225,7 +224,7 @@ def _payload(source: Source, *, artifact_type: str | None) -> dict[str, Any]:
 
     Versioned and self-describing: a JSON file found in a repository six
     months from now has to say what produced it and against which contract,
-    or it is an anonymous blob someone has to reverse-engineer.
+    or it is an unlabelled blob someone has to reverse-engineer.
 
     There is no `generated_at`. A wall-clock stamp would make the second
     export of an unchanged stack differ from the first, which is exactly what
@@ -636,8 +635,7 @@ async def create(
     now = utcnow()
     export = Export(
         id=new_id("exp"),
-        user_id=identity.user.id if identity.user else None,
-        anonymous_session_id=None if identity.user else identity.anonymous_id,
+        user_id=identity.user.id,
         source_type=source_type,
         source_id=source.id,
         artifact_type=artifact_type,
@@ -683,7 +681,6 @@ async def create(
         format=export_format.value,
         artifact_type=artifact_type,
         size_bytes=export.size_bytes,
-        authenticated=identity.is_authenticated,
     )
     return export
 
@@ -711,10 +708,7 @@ async def get(db: AsyncSession, export_id: str, identity: Identity) -> Export:
     if export is None:
         raise NotFound("No export with that id.")
 
-    owned = (identity.user is not None and export.user_id == identity.user.id) or (
-        identity.anonymous_id is not None and export.anonymous_session_id == identity.anonymous_id
-    )
-    if not owned:
+    if export.user_id != identity.user.id:
         raise NotFound("No export with that id.")
 
     if export.expires_at <= utcnow():
@@ -725,16 +719,10 @@ async def get(db: AsyncSession, export_id: str, identity: Identity) -> Export:
 async def list_for(db: AsyncSession, identity: Identity, *, limit: int = 25) -> list[Export]:
     statement = (
         select(Export)
-        .where(Export.expires_at > utcnow())
+        .where(Export.expires_at > utcnow(), Export.user_id == identity.user.id)
         .order_by(Export.created_at.desc())
         .limit(limit)
     )
-    if identity.user is not None:
-        statement = statement.where(Export.user_id == identity.user.id)
-    elif identity.anonymous_id is not None:
-        statement = statement.where(Export.anonymous_session_id == identity.anonymous_id)
-    else:
-        return []
     return list((await db.execute(statement)).scalars().all())
 
 

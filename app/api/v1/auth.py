@@ -4,11 +4,10 @@ from typing import Any
 
 from fastapi import APIRouter, Request, Response, status
 
-from app.api import deps
 from app.api.deps import (
-    CallerIdentity,
     CurrentUser,
     Db,
+    OptionalUser,
     RequestMeta,
     current_session_id,
 )
@@ -20,11 +19,8 @@ from app.core.responses import Envelope, ok
 from app.integrations import email as email_integration
 from app.models.auth import AuthEventType
 from app.schemas.auth import (
-    AnonymousSessionOut,
     AuthResult,
     ChangePasswordRequest,
-    ClaimAnonymousRequest,
-    ClaimResult,
     ForgotPasswordRequest,
     IdentityOut,
     LoginRequest,
@@ -45,7 +41,6 @@ from app.services import (
     email_templates,
     session_service,
     token_service,
-    tool_service,
 )
 
 logger = get_logger("auth.api")
@@ -84,10 +79,6 @@ def _clear_refresh_cookie(response: Response) -> None:
         secure=settings.cookie_secure,
         samesite="lax",
     )
-
-
-# Shared with the tool engine, which mints anonymous sessions of its own.
-_set_anon_cookie = deps.set_anon_cookie
 
 
 def _tokens_for(user: Any, session_id: str) -> SessionTokens:
@@ -159,27 +150,8 @@ async def login(
         db, user_id=user.id, ip=meta.ip, user_agent=meta.user_agent
     )
     _set_refresh_cookie(response, issued.refresh_token)
-    await _claim_anonymous_work(request, db, user_id=user.id)
 
     return ok(AuthResult(user=UserOut.of(user), tokens=_tokens_for(user, issued.session.id)))
-
-
-async def _claim_anonymous_work(request: Request, db: Db, *, user_id: str) -> None:
-    """Move work done before signing in onto the account (M17).
-
-    This is the moment the two identities coexist: the anonymous cookie is
-    still on the request and we now know who the user is. Someone who ran four
-    calculations and then created an account should find them waiting — losing
-    them is the moment they learn that signing up cost them something.
-
-    Registration cannot do this: it returns 202 and issues no session, because
-    the address has to be verified first. Login is the first point at which
-    there is an authenticated identity to claim onto.
-    """
-    anonymous_id = request.cookies.get(settings.anon_cookie_name)
-    if not anonymous_id:
-        return
-    await tool_service.claim_anonymous_runs(db, anonymous_id=anonymous_id, user_id=user_id)
 
 
 @router.post(
@@ -462,57 +434,24 @@ async def revoke_session(
     return ok(SimpleMessage(message="Session revoked."))
 
 
-# ── Anonymous identity ──────────────────────────────────────────────────────
-
-
-@router.post(
-    "/anonymous",
-    response_model=Envelope[AnonymousSessionOut],
-    name="create_anonymous",
-    summary="Start an anonymous session",
-)
-async def create_anonymous(
-    request: Request, response: Response, db: Db, meta: RequestMeta
-) -> dict[str, Any]:
-    existing = request.cookies.get(settings.anon_cookie_name)
-    if existing and await auth_service.get_anonymous_session(db, existing):
-        return ok(AnonymousSessionOut(anonymous_id=existing))
-
-    record = await auth_service.create_anonymous_session(db, meta=meta)
-    _set_anon_cookie(response, record.id)
-    return ok(AnonymousSessionOut(anonymous_id=record.id))
-
-
-@router.post(
-    "/claim",
-    response_model=Envelope[ClaimResult],
-    name="claim_anonymous",
-    summary="Attach anonymous work to this account",
-)
-async def claim_anonymous(
-    payload: ClaimAnonymousRequest, db: Db, user: CurrentUser, meta: RequestMeta
-) -> dict[str, Any]:
-    reassigned = await auth_service.claim_anonymous_session(
-        db, anon_id=payload.anonymous_id, user=user, meta=meta
-    )
-    return ok(ClaimResult(claimed=True, reassigned=reassigned))
-
-
 # ── Identity probe ──────────────────────────────────────────────────────────
 
 
 @router.get(
     "/identity", response_model=Envelope[IdentityOut], name="identity", summary="Who is calling"
 )
-async def identity(caller: CallerIdentity) -> dict[str, Any]:
-    """Unauthenticated-safe. Lets the client decide between the signed-in and
-    anonymous experience without a 401 round trip on first load."""
+async def identity(caller: OptionalUser) -> dict[str, Any]:
+    """Unauthenticated-safe, and the only route in the API that still is.
+
+    Everything else answers 401 without a session. This one answers "no" so a
+    client can tell "signed out" from "the API is down" without reading a 401
+    it would otherwise try to refresh its way out of.
+    """
     return ok(
         IdentityOut(
-            authenticated=caller.is_authenticated,
-            user=UserOut.of(caller.user) if caller.user else None,
-            anonymous_id=caller.anonymous_id,
-            plan=caller.plan,
+            authenticated=caller is not None,
+            user=UserOut.of(caller) if caller else None,
+            plan=caller.plan if caller else None,
             server_time=utcnow(),
         )
     )

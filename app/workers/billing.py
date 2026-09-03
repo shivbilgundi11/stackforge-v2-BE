@@ -274,16 +274,15 @@ async def reconcile_usage(db: AsyncSession, *, metric: Metric | None = None) -> 
             await db.execute(
                 select(
                     UsageRecord.user_id,
-                    UsageRecord.anonymous_session_id,
                     func.sum(UsageRecord.quantity),
                 )
                 .where(UsageRecord.metric == target, UsageRecord.period_start == period_start)
-                .group_by(UsageRecord.user_id, UsageRecord.anonymous_session_id)
+                .group_by(UsageRecord.user_id)
             )
         ).all()
 
-        for user_id, anon_id, durable in rows:
-            identity_key = user_id or anon_id
+        for user_id, durable in rows:
+            identity_key = user_id
             if identity_key is None:  # pragma: no cover — the check constraint forbids it
                 continue
 
@@ -319,7 +318,7 @@ async def reconcile_usage(db: AsyncSession, *, metric: Metric | None = None) -> 
 
 def _can_receive_alerts(user: User) -> bool:
     """Pro and above. Asked of `FeatureService` rather than compared here."""
-    identity = Identity(user=user, anonymous_id=None, session_id=None)
+    identity = Identity(user=user, session_id=None)
     return feature_service.can(identity, Feature.ALERTS).allowed
 
 

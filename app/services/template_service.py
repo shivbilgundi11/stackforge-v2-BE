@@ -106,7 +106,7 @@ class Filters:
     tag: str | None = None
 
 
-def _visible(identity: Identity) -> Select[tuple[Template]]:
+def _visible() -> Select[tuple[Template]]:
     """Templates this caller may see listed.
 
     Organization-scoped rows are excluded for everyone right now: M19 lands the
@@ -115,7 +115,6 @@ def _visible(identity: Identity) -> Select[tuple[Template]]:
     direction — a team template leaking to the public library is a much worse
     failure than one not appearing until M21.
     """
-    _ = identity
     return select(Template).where(Template.organization_id.is_(None))
 
 
@@ -179,7 +178,7 @@ async def search(
     filters: Filters,
     limit: int = 60,
 ) -> list[Template]:
-    statement = _apply(_visible(identity), filters)
+    statement = _apply(_visible(), filters)
 
     if filters.query and filters.query.strip():
         # `websearch_to_tsquery` rather than `plainto_tsquery`: it understands
@@ -199,7 +198,7 @@ async def search(
 
 
 async def get(db: AsyncSession, slug: str, identity: Identity) -> Template:
-    row = await db.scalar(_visible(identity).where(Template.slug == slug))
+    row = await db.scalar(_visible().where(Template.slug == slug))
     if row is None:
         raise NotFound("No template with that slug.")
     return row
@@ -208,7 +207,7 @@ async def get(db: AsyncSession, slug: str, identity: Identity) -> Template:
 async def counts_by_category(db: AsyncSession, identity: Identity) -> dict[str, int]:
     rows = (
         await db.execute(
-            _visible(identity)
+            _visible()
             .with_only_columns(Template.category, func.count())
             .group_by(Template.category)
         )
@@ -224,9 +223,7 @@ async def facets(db: AsyncSession, identity: Identity) -> dict[str, list[str]]:
     case that returns nothing — an empty result from a control the product
     itself offered reads as a broken search.
     """
-    rows = (
-        await db.execute(_visible(identity).with_only_columns(Template.use_cases, Template.tags))
-    ).all()
+    rows = (await db.execute(_visible().with_only_columns(Template.use_cases, Template.tags))).all()
 
     use_cases: set[str] = set()
     tags: set[str] = set()
@@ -345,7 +342,7 @@ async def related(db: AsyncSession, template: Template, *, limit: int = 4) -> li
         Template.use_cases.overlap(template.use_cases or []),
     )
     statement = (
-        _visible(Identity(user=None, anonymous_id=None, session_id=None))
+        _visible()
         .where(Template.id != template.id)
         .where(overlap)
         .order_by((Template.category == template.category).desc(), Template.published_at.desc())
@@ -358,7 +355,7 @@ async def related(db: AsyncSession, template: Template, *, limit: int = 4) -> li
         filler = (
             (
                 await db.execute(
-                    _visible(Identity(user=None, anonymous_id=None, session_id=None))
+                    _visible()
                     .where(Template.id.notin_(seen))
                     .order_by(Template.published_at.desc())
                     .limit(limit - len(rows))

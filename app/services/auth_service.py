@@ -26,7 +26,6 @@ from app.core.errors import AccountLocked, Conflict, InvalidCredentials, TokenIn
 from app.core.logging import get_logger
 from app.integrations import email as email_integration
 from app.models.auth import (
-    AnonymousSession,
     AuthEvent,
     AuthEventType,
     AuthOutcome,
@@ -54,7 +53,6 @@ async def record_event(
     event: AuthEventType,
     outcome: AuthOutcome = AuthOutcome.SUCCESS,
     user_id: str | None = None,
-    anonymous_session_id: str | None = None,
     meta: RequestMeta | None = None,
     metadata: dict[str, str] | None = None,
 ) -> None:
@@ -62,7 +60,6 @@ async def record_event(
         AuthEvent(
             id=new_id("aev"),
             user_id=user_id,
-            anonymous_session_id=anonymous_session_id,
             event=event,
             outcome=outcome,
             ip=meta.ip if meta else None,
@@ -402,55 +399,6 @@ async def change_password(
 
     await email_integration.send(email_templates.password_changed(to=user.email, name=user.name))
     await record_event(db, event=AuthEventType.PASSWORD_CHANGED, user_id=user.id, meta=meta)
-
-
-# ── Anonymous identity ──────────────────────────────────────────────────────
-
-
-async def create_anonymous_session(db: AsyncSession, *, meta: RequestMeta) -> AnonymousSession:
-    record = AnonymousSession(
-        id=new_id("anon"),
-        ip=meta.ip,
-        user_agent=meta.user_agent,
-        last_seen_at=utcnow(),
-    )
-    db.add(record)
-    await db.flush()
-    return record
-
-
-async def get_anonymous_session(db: AsyncSession, anon_id: str) -> AnonymousSession | None:
-    return (
-        await db.execute(select(AnonymousSession).where(AnonymousSession.id == anon_id))
-    ).scalar_one_or_none()
-
-
-async def claim_anonymous_session(
-    db: AsyncSession, *, anon_id: str, user: User, meta: RequestMeta
-) -> int:
-    """Attach anonymous work to a new account.
-
-    Returns the number of records reassigned. Zero today — `tool_runs` arrives
-    in M08 — but the hook exists so the claim call site does not have to change
-    later, and so the flow is exercised by tests from the start.
-    """
-    record = await get_anonymous_session(db, anon_id)
-    if record is None or record.claimed_by_user_id is not None:
-        return 0
-
-    record.claimed_by_user_id = user.id
-    record.claimed_at = utcnow()
-
-    reassigned = 0
-    await record_event(
-        db,
-        event=AuthEventType.ANONYMOUS_CLAIMED,
-        user_id=user.id,
-        anonymous_session_id=anon_id,
-        meta=meta,
-        metadata={"reassigned": str(reassigned)},
-    )
-    return reassigned
 
 
 # ── Account ─────────────────────────────────────────────────────────────────

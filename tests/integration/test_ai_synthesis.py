@@ -402,7 +402,7 @@ async def test_every_comparison_is_wired_to_the_same_prompt(
     # An anonymous visitor gets two AI calls a day, and this test needs four
     # in one request cycle. Raising the quota is the operator action, not a
     # monkeypatch — the same write M20 exposes.
-    await set_limit(db, plan=Plan.FREE, metric=Metric.AI_CALLS_PER_DAY, value=10, anonymous=True)
+    await set_limit(db, plan=Plan.FREE, metric=Metric.AI_CALLS_PER_DAY, value=10)
 
     calls = [
         (
