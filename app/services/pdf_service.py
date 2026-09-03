@@ -59,6 +59,7 @@ from reportlab.platypus import (
 from app.core.config import settings
 from app.core.database import utcnow
 from app.core.logging import get_logger
+from app.data import disclaimers
 from app.services import diagram_render
 
 logger = get_logger("pdf")
@@ -270,6 +271,7 @@ def _render_chromium(document: Document) -> bytes:
 
     markup = to_html(document)
     footer = html.escape(document.share_url or "stackforge.dev")
+    notice = html.escape(disclaimers.pdf_footer(document.stamped_at.date()))
 
     with sync_playwright() as playwright:
         browser = playwright.chromium.launch(args=["--no-sandbox"])
@@ -285,11 +287,17 @@ def _render_chromium(document: Document) -> bytes:
                 print_background=True,
                 display_header_footer=True,
                 header_template="<div></div>",
+                # Every page, not only the cover — a footer on page one is
+                # a footer missing from the page somebody screenshots. The
+                # notice goes on its own row above the URL so it is not
+                # competing with the page number for the same line.
                 footer_template=(
                     '<div style="width:100%;font-size:8px;color:#78716c;'
-                    'padding:0 18mm;display:flex;justify-content:space-between;">'
+                    "padding:0 18mm;font-family:'Segoe UI',sans-serif;\">"
+                    f'<div style="text-align:center;padding-bottom:2px;">{notice}</div>'
+                    '<div style="display:flex;justify-content:space-between;">'
                     f"<span>{footer}</span>"
-                    '<span class="pageNumber"></span></div>'
+                    '<span class="pageNumber"></span></div></div>'
                 ),
                 margin={"top": "20mm", "bottom": "18mm", "left": "18mm", "right": "18mm"},
             )
@@ -476,12 +484,19 @@ def _render_reportlab(document: Document) -> bytes:
     )
     footer_text = document.share_url or "stackforge.dev"
 
+    notice = disclaimers.pdf_footer(document.stamped_at.date())
+
     def _decorate(canvas: Any, doc: Any) -> None:
         canvas.saveState()
         canvas.setFont("Helvetica", 7.5)
         canvas.setFillColor(muted)
         canvas.drawString(18 * mm, 11 * mm, footer_text)
         canvas.drawRightString(A4[0] - 18 * mm, 11 * mm, str(doc.page))
+        # The downgraded backend carries the same notice as the good one. A
+        # disclaimer that depends on which renderer was available is a
+        # disclaimer that is missing from some of the documents.
+        canvas.setFont("Helvetica", 6.5)
+        canvas.drawCentredString(A4[0] / 2, 7 * mm, notice)
         canvas.restoreState()
 
     template.build(story, onFirstPage=_decorate, onLaterPages=_decorate)

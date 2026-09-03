@@ -27,7 +27,7 @@ from app.services.artifacts.sources import Source, StackSource
 # Reused rather than reimplemented: `_service` fixes the restart policy, the
 # health-check timings, and the `service_healthy` dependency condition that
 # M13 got right. A second copy of those would drift.
-from app.services.infra_artifacts import STARTER_HEADER, _dump, _service
+from app.services.infra_artifacts import _dump, _service, starter_header
 
 TYPE_COMPOSE = "compose"
 TYPE_ENV = "env"
@@ -369,7 +369,7 @@ def compose(source: StackSource) -> Artifact:
         type=TYPE_COMPOSE,
         format="yaml",
         filename="docker-compose.yml",
-        content=STARTER_HEADER + _notes(source, chosen) + "\n" + _dump(document),
+        content=starter_header() + _notes(source, chosen) + "\n" + _dump(document),
         language="yaml",
     )
 

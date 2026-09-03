@@ -15,6 +15,8 @@ from __future__ import annotations
 
 from typing import Final
 
+from app.core.database import utcnow
+from app.data import disclaimers
 from app.schemas.catalog import ToolOut
 from app.schemas.tools import Artifact
 from app.services.artifacts.sources import Source, StackSource
@@ -116,7 +118,9 @@ def generate(source: StackSource) -> Artifact:
         type=TYPE,
         format="text",
         filename=".cursorrules",
-        content=f"""# {source.title}
+        content=f"""{disclaimers.file_header(utcnow().date())}
+
+# {source.title}
 
 This project is built on a fixed stack. Do not introduce an alternative to any
 component listed below without being asked — a suggestion that swaps the vector

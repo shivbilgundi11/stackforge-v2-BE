@@ -33,6 +33,8 @@ import re
 import textwrap
 from typing import Any, Final, NamedTuple
 
+from app.core.database import utcnow
+from app.data import disclaimers
 from app.schemas.tools import Artifact, ToolWarning
 
 #: The spec revision the generated server targets. Stated in the README
@@ -249,7 +251,7 @@ def generate(
             type="mcp-server",
             format="code",
             filename=f"{package}/server.py",
-            content=server_py,
+            content=f"{_header()}\n\n{server_py}",
             language="python",
         ),
         Artifact(
@@ -277,7 +279,7 @@ def generate(
             type="mcp-env",
             format="text",
             filename=f"{package}/.env.example",
-            content=_env_example(auth=auth, transport=transport),
+            content=f"{_header()}\n\n{_env_example(auth=auth, transport=transport)}",
         ),
         Artifact(
             type="mcp-tests",
@@ -830,3 +832,15 @@ def _sdk_interface_check() -> str | None:
             f"not run against the newest SDK — please flag this."
         )
     return None
+
+
+def _header() -> str:
+    """The generated-file notice, for the artefacts that can hold a comment.
+
+    `claude_desktop_config.json` deliberately does not get one. JSON has no
+    comment syntax, and the alternative — a `_comment` key — puts an unknown
+    field into a file another product parses. The notice reaches the same
+    reader through the README and `.env.example` beside it, which is worth more
+    than a key that might trip a strict loader.
+    """
+    return disclaimers.file_header(utcnow().date())
