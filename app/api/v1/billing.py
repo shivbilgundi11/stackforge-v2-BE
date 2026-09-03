@@ -31,6 +31,7 @@ from app.schemas.billing import (
     InvoiceOut,
     PlanFeatureOut,
     PlanLimitOut,
+    PlanPriceOut,
     PlanSelectionIn,
     PricingPlanOut,
     SeatChangeIn,
@@ -90,6 +91,16 @@ async def list_plans(db: Db, identity: CallerIdentity) -> dict[str, Any]:
                 annual_minor=spec.annual_minor,
                 annual_saving_minor=plan_data.annual_saving_minor(spec),
                 currency=plan_data.CURRENCY,
+                prices=[
+                    PlanPriceOut(
+                        currency=price.currency,
+                        monthly_minor=price.monthly_minor,
+                        annual_minor=price.annual_minor,
+                        annual_saving_minor=price.annual_saving_minor,
+                        charged=price.currency == plan_data.CURRENCY,
+                    )
+                    for price in plan_data.prices_for(spec)
+                ],
                 per_seat=spec.per_seat,
                 trial_days=spec.trial_days,
                 highlights=list(spec.highlights),

@@ -188,15 +188,52 @@ FORMAT_FEATURES: Final[dict[ExportFormat, Feature]] = {
 
 
 @dataclass(frozen=True)
+class Price:
+    """One plan's amount in one currency, in that currency's minor units.
+
+    Only INR is ever charged. Razorpay settles in rupees on a standard Indian
+    account, so every other currency here is a *reading* of the price: the
+    dollar figure is what a page may show, the rupee figure is what the card
+    is debited. Every surface that quotes an amount someone is about to pay
+    quotes the INR one.
+
+    Hand-set rather than converted at render time. A live rate moves the shelf
+    price of the product between two page loads, and a hardcoded rate is a lie
+    with a delay on it — so the dollar price is chosen, reviewed, and shipped
+    like the rupee one.
+    """
+
+    currency: str
+    #: Minor units, per month. `None` means "talk to us" — Enterprise has no
+    #: self-serve price, and a page that invents one would be lying.
+    monthly_minor: int | None
+    #: Annual billing at two months free, so twelve months costs ten.
+    annual_minor: int | None
+
+    @property
+    def annual_saving_minor(self) -> int:
+        """What the annual price saves against twelve monthly payments."""
+        if self.monthly_minor is None or self.annual_minor is None:
+            return 0
+        return max(0, self.monthly_minor * 12 - self.annual_minor)
+
+
+@dataclass(frozen=True)
 class PlanSpec:
     plan: Plan
     label: str
     tagline: str
     #: Minor units (paise), per month. `None` means "talk to us" — Enterprise
     #: has no self-serve price, and a page that invents one would be lying.
+    #:
+    #: This is the charged amount: `razorpay-sync` builds the provider's plans
+    #: from it, and it is what the checkout debits.
     monthly_minor: int | None
     #: Annual billing at two months free, so twelve months costs ten.
     annual_minor: int | None
+    #: The same plan in the currencies it can be *read* in, INR excluded — it
+    #: is already above. Display only; see `Price`.
+    display_prices: tuple[Price, ...]
     per_seat: bool
     #: Zero on every plan: the product does not sell a trial.
     #:
@@ -204,7 +241,7 @@ class PlanSpec:
     #: non-zero value makes `billing_service` set `start_at` in the future,
     #: and Razorpay reads a future start as "authorize the mandate now, charge
     #: later" — so Checkout collects its token authorization amount (₹5)
-    #: instead of the plan price, and the customer sees ₹5 where ₹1,599 was
+    #: instead of the plan price, and the customer sees ₹5 where ₹499 was
     #: advertised. The trial machinery downstream (`trial_ends_at`,
     #: `_has_trialed`, the expiry reminder worker) still exists to serve any
     #: subscription created while this was 7; nothing new enters it.
@@ -218,8 +255,16 @@ class PlanSpec:
 
 
 #: Razorpay settles in INR on a standard Indian account; charging USD needs
-#: International Payments enabled and approved. Every amount below is paise.
+#: International Payments enabled and approved. Every `monthly_minor` and
+#: `annual_minor` below is paise, and it is the amount the card is debited.
 CURRENCY: Final = "inr"
+
+#: Every currency a price may be *shown* in, charged one first. The settings
+#: toggle offers exactly these, and `display_prices` carries the rest of them
+#: per plan. Adding one here without adding it to every priced plan leaves
+#: that plan quoting rupees while the rest of the page quotes dollars — which
+#: is what `test_plans.py` asserts against.
+DISPLAY_CURRENCIES: Final[tuple[str, ...]] = ("inr", "usd")
 
 PLANS: Final[tuple[PlanSpec, ...]] = (
     PlanSpec(
@@ -228,6 +273,7 @@ PLANS: Final[tuple[PlanSpec, ...]] = (
         tagline="Every tool, every catalog page, no card.",
         monthly_minor=0,
         annual_minor=0,
+        display_prices=(Price(currency="usd", monthly_minor=0, annual_minor=0),),
         per_seat=False,
         trial_days=0,
         highlights=(
@@ -248,8 +294,9 @@ PLANS: Final[tuple[PlanSpec, ...]] = (
         plan=Plan.PRO,
         label="Pro",
         tagline="For the person who has to defend the number.",
-        monthly_minor=159_900,
-        annual_minor=1_599_900,
+        monthly_minor=49_900,
+        annual_minor=499_900,
+        display_prices=(Price(currency="usd", monthly_minor=599, annual_minor=5_999),),
         per_seat=False,
         trial_days=0,
         highlights=(
@@ -267,8 +314,9 @@ PLANS: Final[tuple[PlanSpec, ...]] = (
         plan=Plan.TEAM,
         label="Team",
         tagline="One shared view of what the team has decided.",
-        monthly_minor=399_900,
-        annual_minor=3_999_900,
+        monthly_minor=129_900,
+        annual_minor=1_299_900,
+        display_prices=(Price(currency="usd", monthly_minor=1_499, annual_minor=14_999),),
         per_seat=True,
         trial_days=0,
         highlights=(
@@ -287,6 +335,7 @@ PLANS: Final[tuple[PlanSpec, ...]] = (
         tagline="Your procurement process, our numbers.",
         monthly_minor=None,
         annual_minor=None,
+        display_prices=(Price(currency="usd", monthly_minor=None, annual_minor=None),),
         per_seat=True,
         trial_days=0,
         highlights=(
@@ -376,10 +425,27 @@ def outranks(plan: Plan, minimum: Plan) -> bool:
 
 
 def annual_saving_minor(spec: PlanSpec) -> int:
-    """What the annual price saves against twelve monthly payments."""
-    if spec.monthly_minor is None or spec.annual_minor is None:
-        return 0
-    return max(0, spec.monthly_minor * 12 - spec.annual_minor)
+    """What the annual price saves against twelve monthly payments, in INR."""
+    return charged_price(spec).annual_saving_minor
+
+
+def charged_price(spec: PlanSpec) -> Price:
+    """The amount that actually leaves a card. Always INR."""
+    return Price(
+        currency=CURRENCY,
+        monthly_minor=spec.monthly_minor,
+        annual_minor=spec.annual_minor,
+    )
+
+
+def prices_for(spec: PlanSpec) -> tuple[Price, ...]:
+    """Every currency this plan can be read in, the charged one first.
+
+    Order matters on the wire: a client that does not recognise the currency
+    it was asked for falls back to the head of this list, which is the only
+    one guaranteed to be both present and true.
+    """
+    return (charged_price(spec), *spec.display_prices)
 
 
 __all__ = [
@@ -387,6 +453,7 @@ __all__ = [
     "BY_PLAN",
     "CURRENCY",
     "DEFAULT_QUOTAS",
+    "DISPLAY_CURRENCIES",
     "FEATURES",
     "FORMAT_FEATURES",
     "PLANS",
@@ -394,8 +461,11 @@ __all__ = [
     "Feature",
     "FeatureSpec",
     "PlanSpec",
+    "Price",
     "annual_saving_minor",
+    "charged_price",
     "feature_spec",
     "outranks",
+    "prices_for",
     "spec_for",
 ]

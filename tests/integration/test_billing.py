@@ -35,6 +35,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
 from app.core.database import utcnow
+from app.data import plans as plan_data
 from app.integrations import razorpay as razorpay_integration
 from app.models.billing import BillingEvent, Subscription, SubscriptionStatus
 from app.models.user import Plan, PlanSource, User
@@ -220,10 +221,44 @@ async def test_the_pricing_page_reads_its_limits_from_the_table(client: AsyncCli
     plans = {plan["key"]: plan for plan in body}
 
     assert set(plans) == {"free", "pro", "team", "enterprise"}
-    assert plans["pro"]["monthly_minor"] == 159_900
+    assert plans["pro"]["monthly_minor"] == 49_900
     assert plans["pro"]["currency"] == "inr"
     runs = next(row for row in plans["free"]["limits"] if row["metric"] == "tool_runs_per_day")
     assert runs["limit"] == 25
+
+
+async def test_every_plan_is_priced_in_every_display_currency(client: AsyncClient) -> None:
+    """The currency toggle is one setting for the whole page.
+
+    A plan missing a currency the settings toggle offers would quote rupees in
+    a column of dollars — an inconsistency nobody would read as a bug, they
+    would read it as the price.
+    """
+    body = (await client.get("/api/v1/billing/plans")).json()["data"]
+
+    for plan in body:
+        prices = {row["currency"]: row for row in plan["prices"]}
+        assert set(prices) == set(plan_data.DISPLAY_CURRENCIES), plan["key"]
+        # Exactly one is what a card is debited, and it is the one the flat
+        # fields carry.
+        charged = [row for row in plan["prices"] if row["charged"]]
+        assert [row["currency"] for row in charged] == [plan["currency"]]
+        assert charged[0]["monthly_minor"] == plan["monthly_minor"]
+        assert plan["prices"][0]["charged"] is True
+
+
+async def test_the_dollar_price_is_a_reading_not_a_charge(client: AsyncClient) -> None:
+    """Pro is ₹499 and $5.99 — two numbers for one price, and only the rupee
+    one ever reaches Razorpay."""
+    body = (await client.get("/api/v1/billing/plans")).json()["data"]
+    pro = next(plan for plan in body if plan["key"] == "pro")
+    usd = next(row for row in pro["prices"] if row["currency"] == "usd")
+
+    assert usd["monthly_minor"] == 599
+    assert usd["charged"] is False
+    # Annual saves against twelve monthly payments in its own currency, not by
+    # converting the rupee saving.
+    assert usd["annual_saving_minor"] == 599 * 12 - 5_999
 
 
 async def test_a_changed_limit_changes_the_pricing_page(

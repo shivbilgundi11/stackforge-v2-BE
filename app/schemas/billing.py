@@ -30,17 +30,45 @@ class PlanLimitOut(BaseModel):
     limit: int | None
 
 
-class PricingPlanOut(BaseModel):
-    key: str
-    label: str
-    tagline: str
+class PlanPriceOut(BaseModel):
+    """The plan's amount in one currency.
+
+    Every currency the product can be *read* in ships in the same payload, so
+    switching the display currency is a re-render rather than a refetch — the
+    pricing page is public and its query is cached, and a currency that needed
+    a round trip would flip the whole table back to a skeleton.
+
+    Only `charged` is a promise. The rest are readings of the same price for
+    people who do not think in rupees.
+    """
+
+    currency: str
     #: Minor units. `null` on Enterprise, which has no self-serve price — a
     #: page that invented one would be lying.
     monthly_minor: int | None
     annual_minor: int | None
     #: What annual billing saves against twelve monthly payments.
     annual_saving_minor: int
+    #: True for the one currency a card is actually debited in. Exactly one
+    #: entry per plan has it, and every surface quoting an amount someone is
+    #: about to pay quotes that one.
+    charged: bool
+
+
+class PricingPlanOut(BaseModel):
+    key: str
+    label: str
+    tagline: str
+    #: Minor units in `currency` — the charged price. Kept flat as well as
+    #: inside `prices` because it is what the checkout debits, and a caller
+    #: that must not get this wrong should not have to pick a row to find it.
+    monthly_minor: int | None
+    annual_minor: int | None
+    #: What annual billing saves against twelve monthly payments.
+    annual_saving_minor: int
     currency: str
+    #: The same plan in each currency it can be shown in, charged one first.
+    prices: list[PlanPriceOut]
     per_seat: bool
     trial_days: int
     highlights: list[str]
@@ -173,6 +201,7 @@ __all__ = [
     "InvoiceOut",
     "PlanFeatureOut",
     "PlanLimitOut",
+    "PlanPriceOut",
     "PricingPlanOut",
     "SubscriptionOut",
     "UsageSummaryOut",
