@@ -80,6 +80,29 @@ def _looks_like_id(value: str) -> bool:
     return 8 <= len(value) <= 64 and value.replace("_", "").replace("-", "").isalnum()
 
 
+#: `/docs` is the one route that returns a document rather than JSON, and
+#: Swagger UI is loaded from a CDN with an inline bootstrap script — so the
+#: API-wide CSP below blocks every asset the page needs and renders it blank.
+#: These are the only paths that get the relaxed policy, and FastAPI serves
+#: none of them when `ENVIRONMENT=production` (`docs_url` is None there), so
+#: the loosened directives never reach a production response.
+DOCS_PATHS = frozenset({"/docs", "/docs/oauth2-redirect"})
+
+#: Swagger UI needs its stylesheet and bundle from jsdelivr, the FastAPI
+#: favicon, `data:` images it inlines itself, and `unsafe-inline` for the
+#: bootstrap script FastAPI generates. `connect-src 'self'` is what lets the
+#: page fetch /openapi.json and lets "Try it out" call the API.
+DOCS_CSP = (
+    "default-src 'none'; "
+    "script-src 'self' https://cdn.jsdelivr.net 'unsafe-inline'; "
+    "style-src 'self' https://cdn.jsdelivr.net 'unsafe-inline'; "
+    "img-src 'self' data: https://fastapi.tiangolo.com; "
+    "font-src 'self' https://cdn.jsdelivr.net; "
+    "connect-src 'self'; "
+    "frame-ancestors 'none'"
+)
+
+
 class SecurityHeadersMiddleware(BaseHTTPMiddleware):
     def __init__(self, app: ASGIApp) -> None:
         super().__init__(app)
@@ -101,4 +124,6 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
         response = await call_next(request)
         for key, value in self._headers.items():
             response.headers.setdefault(key, value)
+        if request.url.path in DOCS_PATHS:
+            response.headers["Content-Security-Policy"] = DOCS_CSP
         return response

@@ -537,6 +537,35 @@ class TestEnvelopeAndErrors:
         assert response.headers["X-Frame-Options"] == "DENY"
         assert "Content-Security-Policy" in response.headers
 
+    async def test_api_csp_allows_nothing(self, anon_client: AsyncClient) -> None:
+        """The API returns JSON, never a document, so nothing may load."""
+        response = await anon_client.get("/health")
+        assert response.headers["Content-Security-Policy"] == (
+            "default-src 'none'; frame-ancestors 'none'"
+        )
+
+    async def test_docs_csp_admits_what_swagger_ui_loads(self, anon_client: AsyncClient) -> None:
+        """`/docs` is the one route that renders a document, and it pulls
+        Swagger UI from a CDN with an inline bootstrap script. Under the
+        API-wide `default-src 'none'` the page loads and stays blank, which is
+        why this asserts the directives rather than the status code."""
+        response = await anon_client.get("/docs")
+        assert response.status_code == 200
+
+        csp = response.headers["Content-Security-Policy"]
+        assert "script-src 'self' https://cdn.jsdelivr.net 'unsafe-inline'" in csp
+        assert "style-src 'self' https://cdn.jsdelivr.net 'unsafe-inline'" in csp
+        assert "img-src 'self' data: https://fastapi.tiangolo.com" in csp
+        # Fetching /openapi.json, and every "Try it out" call.
+        assert "connect-src 'self'" in csp
+        # Relaxed for the assets, never for framing.
+        assert "frame-ancestors 'none'" in csp
+
+        # Every external URL the page asks for must be one the policy admits.
+        for origin in ("https://cdn.jsdelivr.net", "https://fastapi.tiangolo.com"):
+            assert origin in response.text
+            assert origin in csp
+
     async def test_client_supplied_request_id_is_sanitised(self, anon_client: AsyncClient) -> None:
         """Echoing an arbitrary anon_client string into logs and headers is a
         log-injection vector."""
