@@ -16,7 +16,7 @@ from fastapi import APIRouter, Header, Request
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.deps import CallerIdentity, CurrentUser, Db
+from app.api.deps import CallerIdentity, CurrentUser, Db, OptionalUser
 from app.core.errors import ValidationFailed
 from app.core.logging import get_logger
 from app.core.responses import Envelope, ok
@@ -70,15 +70,24 @@ VISIBLE_METRICS = (
 
 
 @router.get("/plans", response_model=Envelope[list[PricingPlanOut]], name="list_plans")
-async def list_plans(db: Db, identity: CallerIdentity) -> dict[str, Any]:
+async def list_plans(db: Db, user: OptionalUser) -> dict[str, Any]:
     """The pricing table, limits included.
 
     Read from `plan_quotas` rather than from the copy in `data/plans.py`, so
     raising the free tier with an `UPDATE` changes the page too. That is the
     whole reason the limits live in a table: a marketing number and an enforced
     number that can disagree eventually will.
+
+    Keyed on `OptionalUser`, never `CallerIdentity`: this is the one billing
+    route a signed-out caller must reach. The signup form's plan picker and the
+    pricing page both render from it, and a 401 here is an empty plan list on
+    the page that exists to sell the plans.
     """
     limits = await _limits_by_plan(db)
+
+    #: None when signed out — nothing is the current plan, and nothing is
+    #: already included in it.
+    viewer_plan = user.plan if user is not None else None
 
     payload: list[PricingPlanOut] = []
     for spec in plan_data.PLANS:
@@ -109,9 +118,11 @@ async def list_plans(db: Db, identity: CallerIdentity) -> dict[str, Any]:
                 # A plan with no price configured cannot be bought here, however
                 # much the copy would like to sell it.
                 checkout=spec.checkout and _has_price(spec.plan),
-                current=identity.plan is spec.plan,
+                current=viewer_plan is spec.plan,
                 included=(
-                    identity.plan is not spec.plan and plan_data.outranks(identity.plan, spec.plan)
+                    viewer_plan is not None
+                    and viewer_plan is not spec.plan
+                    and plan_data.outranks(viewer_plan, spec.plan)
                 ),
                 features=[
                     PlanFeatureOut(
