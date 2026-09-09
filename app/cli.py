@@ -334,6 +334,62 @@ def _razorpay_reconcile() -> None:
     asyncio.run(run())
 
 
+def _send_test_email() -> None:
+    """send-test-email <address> — prove the mail configuration actually works.
+
+    Deliberately bypasses `integrations.email.send`, which swallows every
+    exception so a provider outage cannot fail a registration. That is right on
+    the request path and useless here: a wrong password would print nothing and
+    look like success. This calls the sender directly and lets it raise.
+    """
+    import asyncio
+
+    if len(sys.argv) < 3:
+        print("usage: python -m app.cli send-test-email <address>")
+        raise SystemExit(2)
+    recipient = sys.argv[2]
+
+    from app.core.config import settings
+    from app.integrations.email import Email, get_sender
+
+    # The config guards are worth nothing here unless they actually run: the
+    # CLI does not go through the app's startup path, so a placeholder left in
+    # SMTP_USER reached the wire and came back as an opaque 535 from the
+    # server instead of the message that names the line to fix.
+    try:
+        settings.validate_runtime()
+    except RuntimeError as exc:
+        print(exc)
+        raise SystemExit(2) from exc
+
+    print(f"provider  {settings.email_provider}")
+    if settings.email_provider == "smtp":
+        if settings.smtp_use_ssl:
+            mode = "implicit TLS"
+        else:
+            mode = "STARTTLS" if settings.smtp_tls else "plaintext"
+        auth = settings.smtp_user or "(anonymous)"
+        print(f"host      {settings.smtp_host}:{settings.smtp_port} ({mode})")
+        print(f"login     {auth}")
+    print(f"from      {settings.email_from}")
+    print(f"to        {recipient}\n")
+
+    message = Email(
+        to=recipient,
+        subject="StackForge SMTP test",
+        text="If you are reading this, the mail configuration works.",
+        html="<p>If you are reading this, the mail configuration works.</p>",
+    )
+
+    try:
+        asyncio.run(get_sender().send(message))
+    except Exception as exc:
+        print(f"FAILED    {type(exc).__name__}: {exc}")
+        raise SystemExit(1) from exc
+
+    print("sent - check the inbox, and the spam folder before assuming otherwise")
+
+
 COMMANDS = {
     "generate-keypair": _generate_keypair,
     "openapi": _openapi,
@@ -343,6 +399,7 @@ COMMANDS = {
     "purge-runs": _purge_runs,
     "razorpay-sync": _razorpay_sync,
     "razorpay-reconcile": _razorpay_reconcile,
+    "send-test-email": _send_test_email,
 }
 
 

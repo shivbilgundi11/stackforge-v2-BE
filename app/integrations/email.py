@@ -74,8 +74,13 @@ class SmtpSender:
         # smtplib is synchronous. Acceptable because this runs off the request
         # path in the worker; if it ever moves onto the request path, swap for
         # aiosmtplib rather than leaving a blocking call in the event loop.
-        with smtplib.SMTP(settings.smtp_host, settings.smtp_port, timeout=10) as client:
-            if settings.smtp_tls:
+        #
+        # Two ways in, and picking the wrong one hangs until the timeout rather
+        # than erroring usefully: port 465 is encrypted from the first byte
+        # (SMTP_SSL), while 587 opens in the clear and upgrades (STARTTLS).
+        connect = smtplib.SMTP_SSL if settings.smtp_use_ssl else smtplib.SMTP
+        with connect(settings.smtp_host, settings.smtp_port, timeout=10) as client:
+            if settings.smtp_tls and not settings.smtp_use_ssl:
                 client.starttls()
             if settings.smtp_user:
                 client.login(settings.smtp_user, settings.smtp_password)

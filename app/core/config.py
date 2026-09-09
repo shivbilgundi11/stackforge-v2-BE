@@ -79,8 +79,21 @@ class Settings(BaseSettings):
     smtp_port: int = 1025
     smtp_user: str = ""
     smtp_password: str = ""
+    #: STARTTLS: connect in the clear on 587 (or 25) and upgrade. The common
+    #: submission path.
     smtp_tls: bool = False
+    #: Implicit TLS: the socket is encrypted from the first byte, which is what
+    #: port 465 expects. Mutually exclusive with `smtp_tls` — a 465 server never
+    #: offers STARTTLS, and a 587 server has nothing listening for a TLS
+    #: handshake. Left unset, it is inferred from the port so the common case
+    #: needs no extra variable.
+    smtp_ssl: bool | None = None
     resend_api_key: str = ""
+
+    @property
+    def smtp_use_ssl(self) -> bool:
+        """Whether to open the connection with implicit TLS."""
+        return self.smtp_ssl if self.smtp_ssl is not None else self.smtp_port == 465
 
     # ── OAuth ──────────────────────────────────────────────────────────────
     google_client_id: str = ""
@@ -180,6 +193,19 @@ class Settings(BaseSettings):
             return cleaned
         return value or None
 
+    @field_validator("smtp_ssl", mode="before")
+    @classmethod
+    def _blank_ssl_is_none(cls, value: object) -> object:
+        # Same two traps as COOKIE_DOMAIN: a blank SMTP_SSL must mean "infer
+        # from the port", but pydantic rejects "" as a bool, and dotenv hands
+        # over the inline comment when the value is blank.
+        if isinstance(value, str):
+            cleaned = value.strip()
+            if not cleaned or cleaned.startswith("#"):
+                return None
+            return cleaned
+        return value
+
     @property
     def is_production(self) -> bool:
         return self.environment == "production"
@@ -240,6 +266,30 @@ class Settings(BaseSettings):
             problems.append("RAZORPAY_WEBHOOK_SECRET is required when RAZORPAY_KEY_ID is set.")
         if self.razorpay_key_id and not self.razorpay_key_secret:
             problems.append("RAZORPAY_KEY_SECRET is required when RAZORPAY_KEY_ID is set.")
+
+        # A username with no password authenticates as nobody and the server
+        # rejects the whole session, so every email fails at send time — where
+        # the failure is swallowed and only logged.
+        if self.email_provider == "smtp" and self.smtp_user and not self.smtp_password:
+            problems.append("SMTP_PASSWORD is required when SMTP_USER is set.")
+        # dotenv hands over the inline comment when the value beside it is
+        # blank (the COOKIE_DOMAIN trap, again). Caught rather than stripped:
+        # a password is not something to silently rewrite, and the failure it
+        # otherwise causes is an opaque auth rejection from the mail server.
+        if self.smtp_password.startswith("#"):
+            problems.append(
+                "SMTP_PASSWORD looks like an inline comment, not a password. "
+                "Move the comment to its own line above SMTP_PASSWORD."
+            )
+        if self.email_provider == "smtp" and "CHANGEME" in f"{self.smtp_user}{self.email_from}":
+            problems.append(
+                "SMTP_USER / EMAIL_FROM still contain the CHANGEME placeholder."
+            )
+        if self.smtp_tls and self.smtp_ssl:
+            problems.append(
+                "SMTP_TLS and SMTP_SSL are mutually exclusive. "
+                "Use SMTP_TLS=true for port 587 (STARTTLS) or SMTP_SSL=true for port 465."
+            )
 
         if self.is_production:
             if not self.cookie_secure:
