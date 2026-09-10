@@ -26,6 +26,7 @@ counter makes.
 
 from __future__ import annotations
 
+import asyncio
 from typing import Any, ClassVar
 
 from arq import cron
@@ -119,7 +120,11 @@ async def build_export(_context: dict[str, Any], export_id: str) -> str:
                 artifact_type=export.artifact_type,
                 export_format=export.format,
             )
-            rendered = export_service.render(
+            # The same thread offload as the inline path, for the same two
+            # reasons: arq's loop is as real a loop as uvicorn's, and the
+            # queued renders are the large ones by definition.
+            rendered = await asyncio.to_thread(
+                export_service.render,
                 source,
                 artifact_type=export.artifact_type,
                 export_format=export.format,
@@ -227,6 +232,13 @@ async def shutdown(_context: dict[str, Any]) -> None:
 
 class WorkerSettings:
     """`uv run arq app.workers.queue.WorkerSettings`."""
+
+    # arq reads this attribute by name, and defaults to localhost:6379 when it
+    # is absent — which is why the worker ran locally for months and could not
+    # start anywhere Redis is its own host. The name has to shadow the module
+    # function above; the call on the right-hand side still resolves to it,
+    # because the class attribute is not bound until the body finishes.
+    redis_settings: ClassVar[RedisSettings] = redis_settings()
 
     functions: ClassVar[list[Any]] = [
         build_export,

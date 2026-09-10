@@ -25,6 +25,7 @@ That is FR-11, and it is a unit test rather than a hope.
 
 from __future__ import annotations
 
+import asyncio
 import csv
 import io
 import json
@@ -666,7 +667,13 @@ async def create(
         # far better than a pending row nothing will ever pick up.
         logger.warning("exports.queue_unavailable", export_id=export.id, fallback="inline")
 
-    rendered = render(
+    # Off the event loop. Two reasons, and the second is not an optimisation:
+    # a ZIP or a ReportLab render is hundreds of milliseconds of CPU that would
+    # otherwise stall every other request in this process, and the Chromium
+    # backend drives Playwright's *sync* API, which raises outright when it
+    # finds a running loop in its thread.
+    rendered = await asyncio.to_thread(
+        render,
         source,
         artifact_type=artifact_type,
         export_format=export_format,
