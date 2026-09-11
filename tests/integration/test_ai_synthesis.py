@@ -12,18 +12,19 @@ provenance chip names the model. The text itself is not asserted — the model
 picks that, and a test that pinned it would fail on a prompt improvement.
 
 The provider is stubbed throughout. A test that made live calls would be
-non-deterministic, billable, and — on a free tier metered in requests per day
-— self-limiting: twenty of them and the suite stops working until tomorrow.
+non-deterministic, slow, and billable — every run of the suite would spend
+real money on a check that asserts wiring rather than prose.
 """
 
 from __future__ import annotations
 
 import json
 from collections.abc import Callable, Iterator
+from types import SimpleNamespace
 from typing import Any
 
-import httpx
 import pytest
+from anthropic.types.beta import BetaMessage
 from httpx import AsyncClient
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -38,7 +39,7 @@ from tests.conftest import set_limit
 pytestmark = pytest.mark.usefixtures("seeded_catalog")
 
 
-class _FakeGemini:
+class _FakeClaude:
     """Answers every call with the reply keyed to the purpose asked for.
 
     Keyed rather than scripted in order, because the Architect makes two calls
@@ -46,10 +47,10 @@ class _FakeGemini:
     prompt the assessment's answer — which the schema would accept and the
     page would render as an empty roadmap.
 
-    The purpose is recovered from the schema rather than from the URL: every
-    prompt in the registry has its own, and matching on it is what makes a
-    stub wired to the wrong prompt fail loudly here instead of quietly in the
-    assertion twenty lines down.
+    The purpose is recovered from the schema rather than from the system
+    prompt: every prompt in the registry has its own, and matching on it is
+    what makes a stub wired to the wrong prompt fail loudly here instead of
+    quietly in the assertion twenty lines down.
     """
 
     def __init__(self, replies: dict[str, dict[str, Any]]) -> None:
@@ -58,43 +59,45 @@ class _FakeGemini:
             for purpose, reply in replies.items()
         }
         self.calls: list[dict[str, Any]] = []
+        self.beta = SimpleNamespace(messages=SimpleNamespace(create=self._create))
 
-    async def __aenter__(self) -> _FakeGemini:
+    async def __aenter__(self) -> _FakeClaude:
         return self
 
     async def __aexit__(self, *args: Any) -> None:
         return None
 
-    async def post(self, url: str, **kwargs: Any) -> httpx.Response:
-        self.calls.append({"url": url, **kwargs})
-        schema = kwargs["json"]["generationConfig"]["responseJsonSchema"]
+    async def _create(self, **kwargs: Any) -> BetaMessage:
+        self.calls.append(kwargs)
+        schema = kwargs["output_config"]["format"]["schema"]
         reply = self._by_schema.get(json.dumps(schema, sort_keys=True))
         if reply is None:
-            raise AssertionError(f"no stubbed reply for the schema sent to {url}")
-        return httpx.Response(
-            200,
-            request=httpx.Request("POST", url),
-            json={
-                "candidates": [
-                    {"finishReason": "STOP", "content": {"parts": [{"text": json.dumps(reply)}]}}
+            raise AssertionError(f"no stubbed reply for the schema sent to {kwargs['model']}")
+        return BetaMessage.model_validate(
+            {
+                "id": "msg_test",
+                "type": "message",
+                "role": "assistant",
+                "model": kwargs["model"],
+                "stop_reason": "end_turn",
+                "stop_sequence": None,
+                "content": [
+                    {"type": "thinking", "thinking": "", "signature": "sig"},
+                    {"type": "text", "text": json.dumps(reply)},
                 ],
-                "usageMetadata": {
-                    "promptTokenCount": 900,
-                    "candidatesTokenCount": 300,
-                    "thoughtsTokenCount": 400,
-                },
-            },
+                "usage": {"input_tokens": 900, "output_tokens": 700},
+            }
         )
 
 
 @pytest.fixture
-def gemini(monkeypatch: pytest.MonkeyPatch) -> Iterator[Callable[..., _FakeGemini]]:
-    """A stubbed Gemini, and a key that makes the service believe in it."""
+def claude(monkeypatch: pytest.MonkeyPatch) -> Iterator[Callable[..., _FakeClaude]]:
+    """A stubbed Claude, and a key that makes the service believe in it."""
 
-    def install(replies: dict[str, dict[str, Any]]) -> _FakeGemini:
-        monkeypatch.setattr(settings, "gemini_api_key", "gemini-test")
-        client = _FakeGemini(replies)
-        monkeypatch.setattr(ai_service.httpx, "AsyncClient", lambda **_: client)
+    def install(replies: dict[str, dict[str, Any]]) -> _FakeClaude:
+        monkeypatch.setattr(settings, "anthropic_api_key", "sk-ant-test")
+        client = _FakeClaude(replies)
+        monkeypatch.setattr(ai_service, "AsyncAnthropic", lambda **_: client)
         return client
 
     return install
@@ -133,11 +136,11 @@ ROADMAP_REPLY = {
 
 
 async def test_the_architect_roadmap_is_written_by_a_model_and_reaches_the_page(
-    client: AsyncClient, db: AsyncSession, gemini: Any
+    client: AsyncClient, db: AsyncSession, claude: Any
 ) -> None:
     """The panel this fills was empty for the product's whole life: the table
     shipped as `[]` and the exported document said "roadmap unavailable"."""
-    stub = gemini({"stack_synthesis": SYNTHESIS_REPLY, "roadmap": ROADMAP_REPLY})
+    stub = claude({"stack_synthesis": SYNTHESIS_REPLY, "roadmap": ROADMAP_REPLY})
 
     response = await client.post("/api/v1/architect/recommend", json={})
     assert response.status_code == 200, response.text
@@ -176,7 +179,7 @@ DIMENSION_KEYS = (
 
 
 async def test_the_headline_score_stays_the_engines_through_synthesis(
-    client: AsyncClient, gemini: Any
+    client: AsyncClient, claude: Any
 ) -> None:
     """The number on the ring and the number in the prose are one number.
 
@@ -187,7 +190,7 @@ async def test_the_headline_score_stays_the_engines_through_synthesis(
     another, and the breakdown rows summed to neither. A model that answers in
     the old shape must not move the arithmetic.
     """
-    gemini(
+    claude(
         {
             "stack_synthesis": {
                 **SYNTHESIS_REPLY,
@@ -209,7 +212,7 @@ async def test_the_headline_score_stays_the_engines_through_synthesis(
 
 
 async def test_the_model_can_pick_a_runner_up_and_the_whole_page_follows(
-    client: AsyncClient, gemini: Any
+    client: AsyncClient, claude: Any
 ) -> None:
     """M15 layer 2: the engine ranks, the model selects among what it ranked.
 
@@ -219,7 +222,7 @@ async def test_the_model_can_pick_a_runner_up_and_the_whole_page_follows(
     diagram, alternatives and the export — or the page contradicts itself
     somewhere new instead.
     """
-    gemini(
+    claude(
         {
             "stack_synthesis": {**SYNTHESIS_REPLY, "recommended_rank": "2"},
             "roadmap": ROADMAP_REPLY,
@@ -250,10 +253,10 @@ async def test_the_model_can_pick_a_runner_up_and_the_whole_page_follows(
 
 
 async def test_a_rank_the_engine_never_offered_leaves_the_leader_alone(
-    client: AsyncClient, gemini: Any
+    client: AsyncClient, claude: Any
 ) -> None:
     """D-06: the fallback for a malformed answer is the deterministic one."""
-    gemini(
+    claude(
         {
             "stack_synthesis": {**SYNTHESIS_REPLY, "recommended_rank": "3000"},
             "roadmap": ROADMAP_REPLY,
@@ -269,13 +272,13 @@ async def test_a_rank_the_engine_never_offered_leaves_the_leader_alone(
 
 
 async def test_one_failed_pass_still_leaves_the_other_on_the_page(
-    client: AsyncClient, db: AsyncSession, gemini: Any
+    client: AsyncClient, db: AsyncSession, claude: Any
 ) -> None:
     """Partial enrichment is the normal outcome when an allowance runs out
-    mid-run — the free tier is metered in requests per day, so the second call
+    mid-run — the daily AI allowance is counted per call, so the second call
     of a two-call request is exactly where it runs out. One written section is
     worth more than none."""
-    gemini({"roadmap": ROADMAP_REPLY})  # nothing stubbed for the assessment
+    claude({"roadmap": ROADMAP_REPLY})  # nothing stubbed for the assessment
 
     response = await client.post("/api/v1/architect/recommend", json={})
     data = response.json()["data"]
@@ -292,12 +295,12 @@ async def test_one_failed_pass_still_leaves_the_other_on_the_page(
 
 
 async def test_the_exported_document_carries_the_same_roadmap_as_the_page(
-    client: AsyncClient, gemini: Any
+    client: AsyncClient, claude: Any
 ) -> None:
     """The document is built during `compute`, before any model has answered.
     Filling only the table would leave a download that disagrees with the page
     it was downloaded from — the one failure this artifact exists to avoid."""
-    gemini({"stack_synthesis": SYNTHESIS_REPLY, "roadmap": ROADMAP_REPLY})
+    claude({"stack_synthesis": SYNTHESIS_REPLY, "roadmap": ROADMAP_REPLY})
 
     response = await client.post("/api/v1/architect/recommend", json={})
     data = response.json()["data"]
@@ -309,12 +312,12 @@ async def test_the_exported_document_carries_the_same_roadmap_as_the_page(
 
 
 async def test_a_failed_roadmap_leaves_the_recommendation_whole(
-    client: AsyncClient, gemini: Any
+    client: AsyncClient, claude: Any
 ) -> None:
     """D-06: the rule engine is the product. Every figure on the page is
     computed before a model is asked anything, so a synthesis failure costs
     the commentary and nothing else."""
-    stub = gemini({})  # no reply for any purpose — every call raises
+    stub = claude({})  # no reply for any purpose — every call raises
 
     response = await client.post("/api/v1/architect/recommend", json={})
     assert response.status_code == 200
@@ -329,9 +332,9 @@ async def test_a_failed_roadmap_leaves_the_recommendation_whole(
 
 
 async def test_the_compatibility_checker_explains_what_the_weakest_pair_costs(
-    client: AsyncClient, gemini: Any
+    client: AsyncClient, claude: Any
 ) -> None:
-    gemini(
+    claude(
         {
             "compatibility_rationale": {
                 "summary": "These three sit together without much glue.",
@@ -362,9 +365,9 @@ async def test_the_compatibility_checker_explains_what_the_weakest_pair_costs(
 
 
 async def test_a_comparison_rewrites_the_verdict_and_keeps_the_arithmetic(
-    client: AsyncClient, gemini: Any
+    client: AsyncClient, claude: Any
 ) -> None:
-    gemini(
+    claude(
         {
             "comparison_rationale": {
                 "why": "It wins on the two criteria this profile weights most.",
@@ -394,11 +397,11 @@ async def test_a_comparison_rewrites_the_verdict_and_keeps_the_arithmetic(
 
 
 async def test_every_comparison_is_wired_to_the_same_prompt(
-    client: AsyncClient, db: AsyncSession, gemini: Any
+    client: AsyncClient, db: AsyncSession, claude: Any
 ) -> None:
     """Four endpoints, one prompt. Wiring three of four is the failure mode
     that survives review, because the page looks identical either way."""
-    gemini({"comparison_rationale": {"why": "because", "switch_when": "when"}})
+    claude({"comparison_rationale": {"why": "because", "switch_when": "when"}})
     # An anonymous visitor gets two AI calls a day, and this test needs four
     # in one request cycle. Raising the quota is the operator action, not a
     # monkeypatch — the same write M20 exposes.
@@ -434,12 +437,12 @@ async def test_every_comparison_is_wired_to_the_same_prompt(
 
 
 async def test_the_budget_estimator_adds_suggestions_without_dropping_the_costed_ones(
-    client: AsyncClient, gemini: Any
+    client: AsyncClient, claude: Any
 ) -> None:
     """The engine's rows carry a computed dollar figure; the model's carry a
     judgement about what the change costs. Replacing the first with the second
     would trade a number for an opinion."""
-    gemini(
+    claude(
         {
             "cost_optimization": {
                 "suggestions": [
@@ -485,12 +488,12 @@ async def test_the_budget_estimator_adds_suggestions_without_dropping_the_costed
 
 
 async def test_a_suggestion_the_engine_already_made_annotates_it_instead_of_repeating_it(
-    client: AsyncClient, gemini: Any
+    client: AsyncClient, claude: Any
 ) -> None:
     """The engine computed the saving and cannot judge what the change costs
     in quality; the model is the other way round. Two rows saying the same
     thing is the worst of both — so the judgement lands on the costed row."""
-    gemini(
+    claude(
         {
             "cost_optimization": {
                 "suggestions": [
@@ -572,12 +575,12 @@ DOCUMENT_REPLY = {
 
 
 async def test_an_exported_architecture_document_carries_written_sections(
-    client: AsyncClient, db: AsyncSession, gemini: Any
+    client: AsyncClient, db: AsyncSession, claude: Any
 ) -> None:
     """The prompt for this has been in the registry since M16 and nothing
     called it, so every architecture document shipped as tables and headings
     with no prose in it at all."""
-    gemini(DOCUMENT_REPLY)
+    claude(DOCUMENT_REPLY)
     stack_id = await _a_stack(client, db)
 
     response = await client.post(
@@ -606,11 +609,11 @@ async def test_an_exported_architecture_document_carries_written_sections(
 
 
 async def test_exports_with_nowhere_to_put_prose_do_not_pay_for_any(
-    client: AsyncClient, db: AsyncSession, gemini: Any
+    client: AsyncClient, db: AsyncSession, claude: Any
 ) -> None:
     """A CSV of one table has no room for written sections, and a model call
     whose output is discarded is a cost that only shows up on the bill."""
-    stub = gemini(DOCUMENT_REPLY)
+    stub = claude(DOCUMENT_REPLY)
     stack_id = await _a_stack(client, db)
 
     response = await client.post(
@@ -627,11 +630,11 @@ async def test_exports_with_nowhere_to_put_prose_do_not_pay_for_any(
 
 
 async def test_a_failed_narration_still_exports_the_document(
-    client: AsyncClient, db: AsyncSession, gemini: Any
+    client: AsyncClient, db: AsyncSession, claude: Any
 ) -> None:
     """An export is a paid feature. Failing one to protect prose would be the
     wrong trade — every figure in the document is the engine's own (D-06)."""
-    gemini({})  # every call raises
+    claude({})  # every call raises
     stack_id = await _a_stack(client, db)
 
     response = await client.post(

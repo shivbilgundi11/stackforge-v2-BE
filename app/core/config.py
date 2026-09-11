@@ -102,15 +102,11 @@ class Settings(BaseSettings):
     github_client_secret: str = ""
 
     # ── AI ─────────────────────────────────────────────────────────────────
-    #: Every synthesis call in the product. Without it, every tool that
+    #: Every synthesis call in the product, and the exact `count_tokens` figure
+    #: for a Claude row in the model catalogue. Without it, every tool that
     #: synthesises returns its rule-engine answer marked `rule_based` — which
-    #: is a complete answer, not a degraded one (D-06).
-    gemini_api_key: str = ""
-    #: Not used for generation. The token calculator counts a Claude row in the
-    #: model catalogue with Anthropic's own `count_tokens`, which is the only
-    #: accurate answer for those models and needs a key of its own. Unset means
-    #: the calculator reports `heuristic` for Claude rows and nothing else
-    #: changes.
+    #: is a complete answer, not a degraded one (D-06) — and the token
+    #: calculator reports `heuristic` for Claude rows.
     anthropic_api_key: str = ""
 
     # ── Exports (M18) ──────────────────────────────────────────────────────
@@ -212,16 +208,15 @@ class Settings(BaseSettings):
 
     @property
     def ai_enabled(self) -> bool:
-        return bool(self.gemini_api_key)
+        return bool(self.anthropic_api_key)
 
     @property
     def token_counting_enabled(self) -> bool:
         """Whether Claude rows in the catalogue can be counted exactly.
 
-        Deliberately separate from `ai_enabled`: the two keys buy different
-        things, and a deploy with a Gemini key but no Anthropic key must get
-        full synthesis and an honestly-labelled heuristic token count, not
-        neither.
+        The same key as `ai_enabled` now that synthesis runs on Claude too.
+        Kept as its own name because the two answer different questions at
+        their call sites, and splitting them again should be one edit here.
         """
         return bool(self.anthropic_api_key)
 

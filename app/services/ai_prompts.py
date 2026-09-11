@@ -28,9 +28,10 @@ from __future__ import annotations
 import json
 from typing import Any, Final, Literal, NamedTuple
 
-#: The values the provider accepts for `reasoning_effort`. Spelled as a type
-#: rather than checked at the call site: a bad effort is a 400, and the
-#: registry below is the only place one is ever chosen.
+#: The values of `output_config.effort` this registry uses. The API also
+#: accepts `xhigh` and `max`; nothing here is hard enough to earn them.
+#: Spelled as a type rather than checked at the call site: a bad effort is a
+#: 400, and the registry below is the only place one is ever chosen.
 Effort = Literal["low", "medium", "high"]
 
 #: Bumped whenever any prompt text or schema below changes. One version for
@@ -42,22 +43,21 @@ PROMPT_VERSION: Final = "v5"
 # Models, by what the call is for. Named here rather than at the call site so
 # a re-tier is one edit — and so nothing in a route can pick a model.
 #
-# These are Gemini ids, and the tiering is not cosmetic. The free tier's
-# allowance is **20 requests per day per model**, so two tiers is two
-# allowances: pointing every prompt at one id would take the whole product
-# down after twenty requests, while the split lets the short rationales keep
-# working after the flagship has spent its own.
+# These are Claude ids, and all three tiers point at Claude Opus 5 today.
+# Anthropic meters by tokens and spend rather than by requests per model, so
+# the split the previous provider's free tier forced no longer buys a separate
+# allowance. The names stay so that moving a tier to a cheaper model is one
+# edit here plus a rate in `ai_pricing`.
 
 #: The heavy tier — judgement calls the user will check line by line, and the
 #: architecture prose they will hand to someone else.
-LARGE: Final = "gemini-3.6-flash"
+LARGE: Final = "claude-opus-5"
 #: The default. Same model today; kept as its own name so re-tiering the
 #: middle of the registry stays one edit rather than a search and replace.
-MEDIUM: Final = "gemini-3.6-flash"
-#: Short single-paragraph rationales, where the lite model is
-#: indistinguishable and materially faster — and, more to the point, draws on
-#: a separate daily allowance.
-SMALL: Final = "gemini-3.5-flash-lite"
+MEDIUM: Final = "claude-opus-5"
+#: Short single-paragraph rationales. The first tier to move down a model if
+#: spend starts to matter more than the prose.
+SMALL: Final = "claude-opus-5"
 
 
 #: The largest grounding payload any prompt here sends, measured from a real
@@ -68,40 +68,42 @@ GROUNDING_ALLOWANCE: Final = 4_500
 #: What a prompt may reserve for its answer.
 #:
 #: A spending ceiling, not a provider limit — the models here will emit far
-#: more than this. At the heavy tier's output rate a full reservation is about
-#: three cents, which is the most any single synthesis call is worth.
+#: more than this. At Claude Opus 5's output rate ($25 per million) a full
+#: reservation is about twenty cents, which is the most any single synthesis
+#: call is worth.
 #:
 #: The binding constraint is the other direction, and it is the one that bites:
 #: **thinking tokens come out of the same reservation as the answer**. Exhaust
-#: it and the call returns a 200 with `MAX_TOKENS` and no content at all — not
-#: a truncated answer, an empty one, which degrades to `rule_based` and reads
-#: like a schema fault. Measured on the real prompts, thinking runs from 200
-#: tokens on a one-paragraph rationale to 2,700 on the Architect's assessment,
-#: so every number below is sized against *that* and not against the length of
-#: the prose it is meant to produce.
+#: it and the call stops with `stop_reason: "max_tokens"` and the JSON cut off
+#: or never started — not a usable partial answer, an unparseable one, which
+#: degrades to `rule_based` and reads like a schema fault. The numbers below
+#: were measured against real requests on the previous provider, where
+#: thinking ran from 200 tokens on a one-paragraph rationale to 2,700 on the
+#: Architect's assessment. `ai_calls.error_detail` records
+#: `stop_reason=max_tokens` when one of them proves too small on this one.
 MAX_OUTPUT_RESERVATION: Final = 8_000
 
 #: And the floor, which is the number that actually gets violated. A prompt
 #: reserving less than this has no room for the model to think before it
-#: answers, and the failure is silent: a 200, no content, `rule_based` on the
-#: page. Every prompt here was measured against a real request before its
-#: number was chosen.
+#: answers, and the failure is silent: a 200, no usable content, `rule_based`
+#: on the page. Every prompt here was measured against a real request before
+#: its number was chosen.
 MIN_OUTPUT_RESERVATION: Final = 2_000
 
 
 class Prompt(NamedTuple):
     purpose: str
     model: str
-    #: Passed through as `thinkingConfig.thinkingLevel`. Every call here is a
-    #: short, bounded piece of writing over grounding that is already
-    #: computed, so none of them need the top of the ladder — and it is the
-    #: main lever on both latency and spend, because thinking tokens are
-    #: billed at the output rate.
+    #: Passed through as `output_config.effort`. Every call here is a short,
+    #: bounded piece of writing over grounding that is already computed, so
+    #: none of them need the top of the ladder — and it is the main lever on
+    #: both latency and spend, because thinking tokens are billed at the
+    #: output rate.
     effort: Effort
     #: The **reservation**, not a prediction — and on this provider it is
     #: only charged for what is used, so the risk runs the other way. Too low
     #: is the failure that matters: thinking is drawn from this budget before
-    #: the answer is, and a reservation thinking exhausts comes back empty.
+    #: the answer is, and a reservation thinking exhausts comes back cut off.
     #:
     #: Sized at several times the observed prose, which is what leaves room
     #: for the thinking that precedes it. The short-rationale prompts sat at

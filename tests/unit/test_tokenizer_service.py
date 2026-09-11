@@ -90,23 +90,9 @@ async def test_a_claude_model_is_counted_by_the_provider_not_by_tiktoken(
 
 
 async def test_a_claude_model_without_a_key_falls_back_and_says_so() -> None:
-    """Counting is the only thing the Anthropic key still buys - synthesis
-    runs on Gemini - so its absence has to cost a labelled heuristic and
-    nothing else."""
-    result = await tokenizer_service.count(SAMPLE, model=_model("claude-opus-5", "anthropic:api"))
-
-    assert result.method == tokenizer_service.ESTIMATED
-
-
-async def test_counting_does_not_ride_on_the_generation_key(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """The two keys buy different things from different vendors. A deploy with
-    a Gemini key and no Anthropic key must get full synthesis and an honest
-    heuristic here, not a crash from counting Claude tokens with neither."""
-    monkeypatch.setattr(settings, "gemini_api_key", "gemini-test")
-    monkeypatch.setattr(settings, "anthropic_api_key", "")
-
+    """Without the Anthropic key there is no accurate count for these models,
+    so its absence has to cost a labelled heuristic and nothing else — never a
+    crash, and never someone else's tokenizer passed off as a measurement."""
     result = await tokenizer_service.count(SAMPLE, model=_model("claude-opus-5", "anthropic:api"))
 
     assert result.method == tokenizer_service.ESTIMATED

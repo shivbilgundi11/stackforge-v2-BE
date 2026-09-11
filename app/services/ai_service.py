@@ -14,31 +14,30 @@ That property is the module (D-06). The rule engine has already produced a
 complete, returnable answer before this is called; AI is a layer over it and
 never a gate in front of it.
 
-The provider is **Gemini**, everywhere. It was Groq for everything except the
-Architect, and running two providers meant two request shapes, two failure
-taxonomies, and two sets of quota arithmetic to reason about before answering
-"why did this come back rule_based". One provider is the point.
+The provider is **Anthropic (Claude)**, everywhere. It was Groq, then Gemini,
+and one provider is still the point: one request shape, one failure taxonomy,
+and one set of quota arithmetic to reason about before answering "why did this
+come back rule_based". It is also the vendor `tokenizer_service` already
+counts with, so the process holds one AI key rather than two.
 
 Four consequences of this API are worth stating rather than discovering:
 
-* **Thinking tokens are billed as output and are reported separately.**
-  `candidatesTokenCount` excludes them; `thoughtsTokenCount` holds them. They
-  are folded together in `_gemini_usage`, because a ledger that reports only
-  the visible half of what it paid for is understating cost by more than the
-  visible half on a short answer.
-* **They also come out of `maxOutputTokens`.** A reservation that thinking
-  exhausts returns a 200 with `finishReason: MAX_TOKENS` and *no parts at
-  all* — not a truncated answer, an empty one. That is why the reservations
-  in `ai_prompts` are sized against the thinking budget rather than against
-  the length of the prose.
-* **`thinkingLevel` is the depth knob**, and it is the direct lever on both
-  latency and spend. Every prompt in the registry sits at `low` or `medium`
-  for that reason.
-* **The free tier is metered in requests per day, per model** — 20 of them,
-  not 20 per minute. That is why `ai_prompts` tiers across two models rather
-  than pointing every prompt at one: the allowances are separate, so tiering
-  is the difference between a product that works all day and one that stops
-  after the twentieth request.
+* **Thinking is on, and it is billed as output.** Claude Opus 5 thinks
+  adaptively by default, and `usage.output_tokens` already includes those
+  tokens — there is no separate figure to fold back in, and nothing may
+  subtract it out.
+* **Thinking also comes out of `max_tokens`.** A reservation that thinking
+  exhausts stops with `stop_reason: "max_tokens"` and the JSON cut off, or
+  never started. That is why the reservations in `ai_prompts` are sized
+  against the thinking as well as the prose, and why the stop reason is
+  recorded on the ledger row.
+* **`output_config.effort` is the depth knob**, and it is the direct lever on
+  both latency and spend. Every prompt in the registry sits at `low` or
+  `medium` for that reason.
+* **Caching is explicit.** Nothing caches without a `cache_control` marker, a
+  cache write costs 1.25x the input rate, and a prefix under the model's
+  minimum silently never caches. The marker sits on the system block, the
+  only part of the request that is byte-identical per purpose.
 """
 
 from __future__ import annotations
@@ -49,7 +48,9 @@ from collections.abc import Awaitable, Callable
 from decimal import Decimal
 from typing import Any, Final, NamedTuple
 
-import httpx
+import anthropic
+from anthropic import AsyncAnthropic
+from anthropic.types.beta import BetaMessage, BetaTextBlock
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import Identity
@@ -66,21 +67,14 @@ logger = get_logger("ai")
 #: A synthesis call that has not answered in this long is not going to save the
 #: request. The deterministic result is already computed and waiting.
 TIMEOUT_SECONDS: Final = 60.0
-GEMINI_GENERATE_CONTENT_URL: Final = (
-    "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
-)
 
-#: `finishReason` values that mean the model declined rather than answered.
-#: A declined request is a 200 with no usable content, so it has to be named
-#: here or it arrives as "malformed output" and gets debugged as a bad schema.
-_REFUSAL_REASONS: Final = frozenset(
-    {"SAFETY", "PROHIBITED_CONTENT", "BLOCKLIST", "SPII", "IMAGE_SAFETY", "RECITATION"}
-)
-
-#: The one that is neither a refusal nor a bad schema: the reservation ran out.
-#: On this provider that is a 200 carrying an empty `parts` list, which reads
-#: as malformed output unless it is named.
-_TRUNCATED: Final = "MAX_TOKENS"
+#: Server-side refusal fallback. When a safety classifier declines, the API
+#: re-runs the same request on the model Anthropic recommends for that refusal
+#: category, inside the same call, instead of handing back an empty answer.
+#: `"default"` rather than a pinned model, so a retired fallback model is not a
+#: migration this module owes. Whichever model served the answer is the one
+#: priced and recorded.
+FALLBACK_BETA: Final = "server-side-fallback-2026-07-01"
 
 
 class AiResult(NamedTuple):
@@ -100,16 +94,17 @@ async def generate_json(
     """Run one synthesis call. `None` on any failure whatsoever.
 
     The schema comes from the registry, never from the caller, and the
-    response is requested as structured output rather than asked for in prose
-    and parsed. Parsing prose JSON fails a few percent of the time, and each
-    failure would silently degrade to `rule_based` with no signal separating
-    "the prompt is wrong" from "the model was down".
+    response is requested as structured output (`output_config.format`)
+    rather than asked for in prose and parsed. Parsing prose JSON fails a few
+    percent of the time, and each failure would silently degrade to
+    `rule_based` with no signal separating "the prompt is wrong" from "the
+    model was down".
 
-    The stable half of the prompt goes in `systemInstruction`, byte-identical
-    per purpose, and the rule-engine output that varies per request goes in
-    the user turn after it. That order is the only lever there is on implicit
-    context caching, which is automatic here — there is no marker to send and
-    no way to ask for one.
+    The stable half of the prompt goes in `system`, byte-identical per
+    purpose and carrying the cache marker, and the rule-engine output that
+    varies per request goes in the user turn after it. Caching is a prefix
+    match, so anything variable placed ahead of the marker would turn every
+    request into a cache write that is never read back.
     """
     prompt = ai_prompts.REGISTRY.get(purpose)
     if prompt is None:  # pragma: no cover — a programming error, not an input
@@ -125,40 +120,50 @@ async def generate_json(
         return None
 
     started = time.perf_counter()
-    payload = {
-        "systemInstruction": {"parts": [{"text": prompt.system}]},
-        "contents": [
-            {"role": "user", "parts": [{"text": ai_prompts.user_turn(grounding, variables)}]}
-        ],
-        "generationConfig": {
-            "maxOutputTokens": prompt.max_tokens,
-            "responseMimeType": "application/json",
-            "responseJsonSchema": prompt.schema,
-            # Thinking is billed as output and comes out of the reservation
-            # above, so this is a spend lever and a truncation risk at once.
-            "thinkingConfig": {"thinkingLevel": prompt.effort},
-        },
-    }
     try:
-        async with httpx.AsyncClient(timeout=TIMEOUT_SECONDS) as client:
-            response = await client.post(
-                GEMINI_GENERATE_CONTENT_URL.format(model=prompt.model),
-                headers={"x-goog-api-key": settings.gemini_api_key},
-                json=payload,
+        # A client per call, as the `httpx` client before it was: nothing
+        # outlives the event loop that opened it, which matters for the export
+        # worker as much as for the test suite. Retries are off because a
+        # retried call can no longer answer inside `TIMEOUT_SECONDS`, and the
+        # rule-engine answer is already waiting.
+        async with AsyncAnthropic(
+            api_key=settings.anthropic_api_key, timeout=TIMEOUT_SECONDS, max_retries=0
+        ) as client:
+            response = await client.beta.messages.create(
+                model=prompt.model,
+                max_tokens=prompt.max_tokens,
+                system=[
+                    {
+                        "type": "text",
+                        "text": prompt.system,
+                        "cache_control": {"type": "ephemeral"},
+                    }
+                ],
+                messages=[{"role": "user", "content": ai_prompts.user_turn(grounding, variables)}],
+                # Adaptive is already Opus 5's default; stated so the request
+                # says what it does. Thinking is billed as output and drawn
+                # from `max_tokens`, so `effort` is a spend lever and a
+                # truncation risk at once.
+                thinking={"type": "adaptive"},
+                output_config={
+                    "effort": prompt.effort,
+                    "format": {"type": "json_schema", "schema": prompt.schema},
+                },
+                betas=[FALLBACK_BETA],
+                fallbacks="default",
             )
-            response.raise_for_status()
-            body = response.json()
-    except httpx.TimeoutException as exc:
+    except anthropic.APITimeoutError as exc:
         await _fail(db, prompt, identity, tool_slug, AiOutcome.TIMEOUT, started, exc)
         return None
-    except httpx.HTTPStatusError as exc:
-        # 429 is the daily request allowance on the free tier, and it is the
-        # one failure an operator can act on. Filed under `api_error` it would
-        # send that investigation to the wrong place entirely.
-        outcome = AiOutcome.RATE_LIMITED if exc.response.status_code == 429 else AiOutcome.API_ERROR
-        await _fail(db, prompt, identity, tool_slug, outcome, started, exc)
+    except anthropic.RateLimitError as exc:
+        # 429 is the organisation's rate or spend limit, and it is the one
+        # failure an operator can act on. Filed under `api_error` it would send
+        # that investigation to the wrong place entirely.
+        await _fail(db, prompt, identity, tool_slug, AiOutcome.RATE_LIMITED, started, exc)
         return None
-    except (httpx.HTTPError, ValueError) as exc:
+    except (anthropic.APIStatusError, anthropic.APIConnectionError) as exc:
+        # `APITimeoutError` is a connection error too, which is why it is
+        # caught above rather than here.
         await _fail(db, prompt, identity, tool_slug, AiOutcome.API_ERROR, started, exc)
         return None
     except Exception as exc:
@@ -169,13 +174,18 @@ async def generate_json(
         return None
 
     latency_ms = int((time.perf_counter() - started) * 1000)
-    usage = _gemini_usage(body)
-    finish_reason = _finish_reason(body)
+    usage = _usage(response)
+    # With a refusal fallback in play, the model that answered is not always
+    # the model that was asked. The ledger names and prices the one that did
+    # the work, or a row would reconcile against the wrong invoice line.
+    served_by = response.model
 
-    # A safety classifier can decline and still return a 200 with no content.
-    # Reading the parts without checking would report the refusal as a schema
-    # failure, which is the wrong thing to go and debug.
-    if finish_reason in _REFUSAL_REASONS:
+    # A safety classifier can decline and still return a 200. With the fallback
+    # on, this means every model in the chain declined. Reading the content
+    # without checking would report the refusal as a schema failure, which is
+    # the wrong thing to go and debug.
+    if response.stop_reason == "refusal":
+        category = response.stop_details.category if response.stop_details else None
         await _record(
             db,
             prompt,
@@ -184,12 +194,13 @@ async def generate_json(
             AiOutcome.REFUSAL,
             latency_ms=latency_ms,
             usage=usage,
-            detail=f"refusal:{finish_reason}",
+            model=served_by,
+            detail=f"refusal:{category or 'unspecified'}",
         )
         await _consume_quota(db, identity)
         return None
 
-    data = _gemini_json(body)
+    data = _answer_json(response)
     if data is None:
         await _record(
             db,
@@ -199,15 +210,16 @@ async def generate_json(
             AiOutcome.INVALID_OUTPUT,
             latency_ms=latency_ms,
             usage=usage,
-            # `MAX_TOKENS` here means thinking ate the reservation and the
-            # answer never started. Recording the reason is the difference
-            # between raising `max_tokens` and rewriting a schema.
-            detail=f"finish_reason={finish_reason}",
+            model=served_by,
+            # `max_tokens` here means thinking ate the reservation and the
+            # JSON was cut off. Recording the reason is the difference between
+            # raising `max_tokens` and rewriting a schema.
+            detail=f"stop_reason={response.stop_reason}",
         )
         await _consume_quota(db, identity)
         return None
 
-    cost = ai_pricing.cost_of(model=prompt.model, **usage)
+    cost = ai_pricing.cost_of(model=served_by, **usage)
     await _record(
         db,
         prompt,
@@ -217,13 +229,14 @@ async def generate_json(
         latency_ms=latency_ms,
         usage=usage,
         cost=cost,
+        model=served_by,
     )
     await _consume_quota(db, identity)
 
     logger.info(
         "ai.call",
         purpose=purpose,
-        model=prompt.model,
+        model=served_by,
         latency_ms=latency_ms,
         cached_read=usage["cached_read_tokens"],
         cost_usd=str(cost),
@@ -232,7 +245,7 @@ async def generate_json(
     return AiResult(
         data=data,
         meta=AiMeta(
-            model=prompt.model,
+            model=served_by,
             prompt_version=ai_prompts.PROMPT_VERSION,
             input_tokens=usage["input_tokens"],
             output_tokens=usage["output_tokens"],
@@ -493,82 +506,41 @@ def _default_grounding(output: ToolOutput) -> dict[str, Any]:
     }
 
 
-def _gemini_usage(body: dict[str, Any]) -> dict[str, int]:
+def _usage(response: BetaMessage) -> dict[str, int]:
     """Token counts, in this module's own vocabulary.
 
-    `candidatesTokenCount` is the visible answer only. Thinking is reported
-    separately as `thoughtsTokenCount` and is billed at the **output** rate,
-    so the two are added: a ledger that counted only the visible half would
-    understate a short structured answer by more than it counted, because
-    reasoning routinely runs several times the length of the JSON it produces.
+    The API already reports them the way the ledger wants them. `input_tokens`
+    is the uncached remainder billed at the full rate; cache reads and cache
+    writes arrive as their own figures rather than folded into it. Adding them
+    back together would bill the cached prompt twice and make a working cache
+    read as *more* expensive rather than less.
 
-    `promptTokenCount` includes the implicitly cached part, so the cached
-    count is subtracted back out — downstream, `input_tokens` means the
-    uncached remainder billed at the full rate, and folding the two together
-    would make a working cache read as *more* expensive rather than less. The
-    subtraction is clamped, because a provider figure that exceeds the total
-    it is part of should degrade to zero rather than bill a negative.
+    `output_tokens` includes thinking, which is billed at the output rate. A
+    short structured answer routinely costs several times the JSON it
+    produces, and the ledger has to say so.
 
-    `cached_write_tokens` is always zero. Context caching here is implicit and
-    carries no surcharge for populating it, so there is nothing to charge.
+    The cache figures are optional on the wire and arrive as `None` when
+    nothing was cached, which is the shape the reader has to survive.
     """
-    usage = body.get("usageMetadata")
-    if not isinstance(usage, dict):
-        usage = {}
-    prompt_tokens = max(int(usage.get("promptTokenCount") or 0), 0)
-    cached = min(max(int(usage.get("cachedContentTokenCount") or 0), 0), prompt_tokens)
-    answer = max(int(usage.get("candidatesTokenCount") or 0), 0)
-    thoughts = max(int(usage.get("thoughtsTokenCount") or 0), 0)
+    usage = response.usage
     return {
-        "input_tokens": prompt_tokens - cached,
-        "output_tokens": answer + thoughts,
-        "cached_read_tokens": cached,
-        "cached_write_tokens": 0,
+        "input_tokens": max(usage.input_tokens, 0),
+        "output_tokens": max(usage.output_tokens, 0),
+        "cached_read_tokens": max(usage.cache_read_input_tokens or 0, 0),
+        "cached_write_tokens": max(usage.cache_creation_input_tokens or 0, 0),
     }
 
 
-def _finish_reason(body: dict[str, Any]) -> str | None:
-    candidates = body.get("candidates")
-    if not isinstance(candidates, list) or not candidates:
-        # No candidate at all is how a prompt blocked before generation
-        # arrives. Reporting the block reason keeps it out of the bucket
-        # labelled "the model returned something we could not parse".
-        feedback = body.get("promptFeedback")
-        if isinstance(feedback, dict) and feedback.get("blockReason"):
-            return str(feedback["blockReason"])
-        return None
-    first = candidates[0]
-    if not isinstance(first, dict):
-        return None
-    reason = first.get("finishReason")
-    return str(reason) if reason else None
-
-
-def _gemini_json(body: dict[str, Any]) -> dict[str, Any] | None:
+def _answer_json(response: BetaMessage) -> dict[str, Any] | None:
     """The answer, with the model's own reasoning left out of it.
 
-    Thinking arrives as extra `parts` on the same candidate, marked `thought`.
-    Concatenating every part and parsing the result is what the first version
-    did, and it fails the moment the model narrates before answering — the
-    JSON is valid and the string it is glued to is not.
+    Thinking arrives as its own content blocks ahead of the answer, and a
+    refusal fallback adds a marker block where one model handed over to the
+    next. Only `text` blocks are the answer: concatenating everything and
+    parsing the result is what the first version of this reader did, and it
+    fails the moment anything else is in the list.
     """
-    candidates = body.get("candidates")
-    if not isinstance(candidates, list) or not candidates:
-        return None
-    first = candidates[0]
-    if not isinstance(first, dict):
-        return None
-    content = first.get("content")
-    if not isinstance(content, dict):
-        return None
-    parts = content.get("parts")
-    if not isinstance(parts, list):
-        return None
-    text = "".join(
-        str(part.get("text") or "")
-        for part in parts
-        if isinstance(part, dict) and not part.get("thought")
-    )
+    text = "".join(block.text for block in response.content if isinstance(block, BetaTextBlock))
     try:
         parsed = json.loads(text)
     except json.JSONDecodeError:
@@ -618,12 +590,16 @@ async def _record(
     usage: dict[str, int] | None = None,
     cost: Decimal = Decimal(0),
     detail: str | None = None,
+    model: str | None = None,
 ) -> None:
     """Write the ledger row.
 
     Failures are logged too. A table that only records successes cannot answer
     "how often does this not work", which is the question this table exists
     for. Recording must never be the reason a request fails, so it is wrapped.
+
+    `model` is the one that answered, when a response says so; a call that
+    never got a response records the model it asked for.
     """
     counts = usage or {
         "input_tokens": 0,
@@ -635,7 +611,7 @@ async def _record(
         db.add(
             AiCall(
                 purpose=prompt.purpose,
-                model=prompt.model,
+                model=model or prompt.model,
                 prompt_version=ai_prompts.PROMPT_VERSION,
                 user_id=identity.user.id,
                 tool_slug=tool_slug,

@@ -13,13 +13,11 @@ undercounts Claude by 15-20% on prose and far more on code. Anthropic models
 go to `count_tokens`, which is the only accurate answer, and which is why this
 module needs a client at all.
 
-That client is Anthropic's, and it is the only one in the process — synthesis
-runs on Gemini (`ai_service`), and no provider offers a counting endpoint for
-another vendor's tokeniser. The two are deliberately not the same key and not
-the same object: this one is a measuring instrument for a **catalogue row the
-user picked**, not a model we
-generate with, and a deploy may reasonably have one key and not the other. Its
-absence costs a labelled `heuristic` and nothing else.
+That client is Anthropic's. Synthesis runs on the same vendor with the same key
+(`ai_service`), but deliberately not through the same object: this one is a
+measuring instrument for a **catalogue row the user picked**, not a model we
+generate with, and it runs on a ten-second budget no synthesis call could
+meet. Without the key it costs a labelled `heuristic` and nothing else.
 
 `method` is returned to the caller and goes on the API response, not into a
 log line. The person reaching for a token calculator is exactly the person who
