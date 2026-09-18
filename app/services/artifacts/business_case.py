@@ -53,7 +53,7 @@ def generate(source: RunSource) -> Artifact:
         filename="business-case.md",
         content=f"""# Business case — {source.title}
 
-Prepared from StackForge run `{source.id}` on
+Prepared from Buildtact run `{source.id}` on
 {output.created_at.strftime("%Y-%m-%d")}.
 
 ## Figures

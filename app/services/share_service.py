@@ -1,7 +1,7 @@
 """Public share links (M18).
 
 `PRD.md` §24 lists shareable URLs as a retention mechanic: the recipient lands
-on StackForge and is prompted to run their own session. That makes the share
+on Buildtact and is prompted to run their own session. That makes the share
 page's CTA the whole reason for building it, and it makes the security rules
 below non-negotiable — a link that leaks the owner's identity is a link people
 stop sending.

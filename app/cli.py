@@ -273,7 +273,7 @@ def _razorpay_sync() -> None:
                         "period": period,
                         "interval": 1,
                         "item": {
-                            "name": f"StackForge {spec.label} ({period})",
+                            "name": f"Buildtact {spec.label} ({period})",
                             "description": spec.tagline,
                             "amount": amount,
                             "currency": plan_data.CURRENCY.upper(),
@@ -376,7 +376,7 @@ def _send_test_email() -> None:
 
     message = Email(
         to=recipient,
-        subject="StackForge SMTP test",
+        subject="Buildtact SMTP test",
         text="If you are reading this, the mail configuration works.",
         html="<p>If you are reading this, the mail configuration works.</p>",
     )

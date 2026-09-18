@@ -229,11 +229,11 @@ def test_the_pdf_footer_carries_the_share_url() -> None:
     data = export_service.render(
         stack_source(),
         export_format=ExportFormat.PDF,
-        share_url="https://stackforge.dev/s/tok",
+        share_url="https://buildtact.ai/s/tok",
     ).data
     reader = PdfReader(io.BytesIO(data))
 
-    assert "stackforge.dev/s/tok" in "\n".join(page.extract_text() for page in reader.pages)
+    assert "buildtact.ai/s/tok" in "\n".join(page.extract_text() for page in reader.pages)
 
 
 def test_the_reportlab_backend_is_byte_identical_across_renders() -> None:

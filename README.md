@@ -1,6 +1,6 @@
-# StackForge API
+# Buildtact API
 
-FastAPI backend for the StackForge AI engineering workbench.
+FastAPI backend for the Buildtact AI engineering workbench.
 
 ## Requirements
 

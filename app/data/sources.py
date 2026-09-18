@@ -122,8 +122,8 @@ SOURCES: tuple[SourceSeed, ...] = (
     ),
     SourceSeed(
         "editorial-review",
-        "StackForge editorial review",
-        "https://stackforge.dev/methodology",
+        "Buildtact editorial review",
+        "https://buildtact.ai/methodology",
         "manual",
     ),
 )

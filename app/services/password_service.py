@@ -48,6 +48,10 @@ _COMMON = frozenset(
         "admin12345",
         "welcome123",
         "changeme123",
+        # The product's name, current and former. A password that is the name
+        # of the site it is typed into is the first guess anyone makes.
+        "buildtact",
+        "buildtact123",
         "stackforge",
         "stackforge123",
     }

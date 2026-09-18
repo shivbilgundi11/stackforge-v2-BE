@@ -15,7 +15,7 @@ A rules file that says "use best practices" is noise an assistant will ignore.
 One that pins the libraries, names the versions of the decisions, and states
 the gotchas of *these* components is a file that changes what gets typed.
 
-StackForge generates one of these from a saved stack, with the component
+Buildtact generates one of these from a saved stack, with the component
 gotchas filled in. This is the shape if you are writing it by hand.
 
 ```text path=.cursorrules

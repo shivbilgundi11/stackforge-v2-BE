@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1
 
 # ─────────────────────────────────────────────────────────────────────────────
-# StackForge API — one image, three roles
+# Buildtact API — one image, three roles
 #
 #   api      uvicorn app.main:app
 #   worker   arq app.workers.queue.WorkerSettings

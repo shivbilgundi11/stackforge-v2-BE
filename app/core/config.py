@@ -74,7 +74,7 @@ class Settings(BaseSettings):
 
     # ── Email ──────────────────────────────────────────────────────────────
     email_provider: Literal["smtp", "resend", "console"] = "console"
-    email_from: str = "StackForge <noreply@localhost>"
+    email_from: str = "Buildtact <noreply@localhost>"
     smtp_host: str = "localhost"
     smtp_port: int = 1025
     smtp_user: str = ""

@@ -114,7 +114,7 @@ class LiveRazorpay:
 
     def __init__(self, key_id: str, key_secret: str) -> None:
         self._client = razorpay.Client(auth=(key_id, key_secret))
-        self._client.set_app_details({"title": "StackForge", "version": "1.0"})
+        self._client.set_app_details({"title": "Buildtact", "version": "1.0"})
 
     async def _call(self, action: str, fn: Any, *args: Any, **kwargs: Any) -> Any:
         try:

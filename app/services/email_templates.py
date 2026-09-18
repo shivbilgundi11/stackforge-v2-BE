@@ -16,7 +16,7 @@ from datetime import datetime
 from app.core.config import settings
 from app.integrations.email import Email
 
-BRAND = "StackForge"
+BRAND = "Buildtact"
 
 
 def _wrap(title: str, body: str, action: tuple[str, str] | None = None) -> str:

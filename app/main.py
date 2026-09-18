@@ -65,7 +65,7 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
 
 
 app = FastAPI(
-    title="StackForge API",
+    title="Buildtact API",
     version="0.1.0",
     description="AI engineering workbench — plan, compare, and cost AI stacks.",
     openapi_url="/openapi.json",
@@ -226,4 +226,4 @@ app.include_router(collaboration_router.router, prefix="/api/v1", dependencies=[
 
 @app.get("/", include_in_schema=False)
 async def root() -> dict[str, Any]:
-    return {"service": "stackforge-api", "docs": "/docs", "health": "/health"}
+    return {"service": "buildtact-api", "docs": "/docs", "health": "/health"}
