@@ -378,7 +378,7 @@ async def test_a_comparison_rewrites_the_verdict_and_keeps_the_arithmetic(
 
     response = await client.post(
         "/api/v1/tools/compare/stacks",
-        json={"archetypes": ["serverless", "self-hosted"], "priority": "balanced"},
+        json={"archetypes": ["serverless", "self-hosted"], "priorities": []},
     )
     assert response.status_code == 200, response.text
     data = response.json()["data"]

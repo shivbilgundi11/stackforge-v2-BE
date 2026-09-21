@@ -1,7 +1,9 @@
 """Compare Center endpoints.
 
-Four comparisons, one output contract, one renderer. Every one accepts a
-`priority` that reweights the criteria — see `app/data/compare_criteria.py`.
+Four comparisons, one output contract, one renderer. Every one accepts a set of
+`priorities` that reweight the criteria — see `app/data/compare_criteria.py`.
+An empty set is the balanced weighting; there is no `balanced` member to
+select alongside the others.
 """
 
 from __future__ import annotations
@@ -11,7 +13,7 @@ from decimal import Decimal
 from typing import Any
 
 from fastapi import APIRouter
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from app.api.deps import Db, Identity, RunIdentity
 from app.core.errors import NotFound, ValidationFailed
@@ -100,37 +102,53 @@ def _apply_rationale(output: ToolOutput, data: dict[str, Any]) -> None:
     output.tables["rationale"] = rows
 
 
-class CompareModelsIn(BaseModel):
+class _WithPriorities(BaseModel):
+    """The one field all four comparisons share.
+
+    Order is preserved and duplicates are dropped rather than rejected: the
+    weighting is a set, so `["cost", "cost"]` is not a different question from
+    `["cost"]`, and a 422 would be pedantry. Order still matters — it is what
+    the prose reads back ("wins on a cost and control weighting").
+    """
+
+    priorities: list[Priority] = Field(default_factory=list, max_length=len(PRIORITIES))
+
+    @field_validator("priorities")
+    @classmethod
+    def _dedupe(cls, value: list[Priority]) -> list[Priority]:
+        seen: dict[Priority, None] = {}
+        for priority in value:
+            seen.setdefault(priority, None)
+        return list(seen)
+
+
+class CompareModelsIn(_WithPriorities):
     model_ids: list[str] = Field(min_length=2, max_length=4)
     input_tokens: int = Field(default=2000, ge=0, le=10_000_000)
     output_tokens: int = Field(default=500, ge=0, le=1_000_000)
     requests_per_day: int = Field(default=1000, ge=0, le=100_000_000)
     cached_input_ratio: Decimal = Field(default=Decimal(0), ge=0, le=1)
-    priority: Priority = "balanced"
 
 
-class CompareVectorDbIn(BaseModel):
+class CompareVectorDbIn(_WithPriorities):
     tool_slugs: list[str] = Field(min_length=2, max_length=6)
     vector_count: int = Field(default=1_000_000, ge=1, le=10_000_000_000)
     dimensions: int = Field(default=1536, ge=1, le=16_384)
-    priority: Priority = "balanced"
 
 
-class CompareStacksIn(BaseModel):
+class CompareStacksIn(_WithPriorities):
     archetypes: list[str] = Field(min_length=2, max_length=5)
     monthly_model_spend: Decimal = Field(default=Decimal(500), ge=0)
     blended_hourly_rate: Decimal = Field(default=Decimal(120), ge=1, le=1000)
-    priority: Priority = "balanced"
 
 
-class CompareBuildVsBuyIn(BaseModel):
+class CompareBuildVsBuyIn(_WithPriorities):
     build_hours: int = Field(ge=1, le=100_000)
     blended_hourly_rate: Decimal = Field(default=Decimal(120), ge=1, le=1000)
     build_infra_monthly: Decimal = Field(default=Decimal(0), ge=0)
     maintenance_hours_per_month: Decimal = Field(default=Decimal(0), ge=0, le=1000)
     vendor_monthly: Decimal = Field(ge=0)
     vendor_integration_hours: int = Field(default=0, ge=0, le=10_000)
-    priority: Priority = "balanced"
 
 
 @router.post("/models", response_model=Envelope[ToolRunOut], name="run_compare_models")
@@ -158,7 +176,7 @@ async def run_compare_models(
             output_tokens=payload.output_tokens,
             requests_per_day=payload.requests_per_day,
             cached_input_ratio=payload.cached_input_ratio,
-            priority=payload.priority,
+            priorities=payload.priorities,
         ),
         enrich=_rationale(db, identity, tool_slug="compare-models", payload=payload),
     )
@@ -189,7 +207,7 @@ async def run_compare_vector_db(
             tools=tools,
             vector_count=payload.vector_count,
             dimensions=payload.dimensions,
-            priority=payload.priority,
+            priorities=payload.priorities,
         ),
         enrich=_rationale(db, identity, tool_slug="compare-vector-db", payload=payload),
     )
@@ -215,7 +233,7 @@ async def run_compare_stacks(
             archetypes=archetypes,
             monthly_model_spend=payload.monthly_model_spend,
             blended_hourly_rate=payload.blended_hourly_rate,
-            priority=payload.priority,
+            priorities=payload.priorities,
         ),
         enrich=_rationale(db, identity, tool_slug="compare-stacks", payload=payload),
     )
@@ -239,7 +257,7 @@ async def run_compare_build_vs_buy(
             maintenance_hours_per_month=payload.maintenance_hours_per_month,
             vendor_monthly=payload.vendor_monthly,
             vendor_integration_hours=payload.vendor_integration_hours,
-            priority=payload.priority,
+            priorities=payload.priorities,
         ),
         enrich=_rationale(db, identity, tool_slug="compare-build-vs-buy", payload=payload),
     )
@@ -265,7 +283,6 @@ class CompareMetaOut(BaseModel):
 
 
 PRIORITY_LABELS: dict[str, tuple[str, str]] = {
-    "balanced": ("Balanced", "No axis favoured. A reasonable default."),
     "cost": ("Cost", "Weight spend heavily; accept more operational work to save money."),
     "scale": ("Scale", "Weight headroom; assume this has to survive 10x growth."),
     "speed": ("Speed", "Weight latency and time to ship over long-run cost."),
@@ -276,7 +293,12 @@ PRIORITY_LABELS: dict[str, tuple[str, str]] = {
 
 @router.get("/meta", response_model=Envelope[CompareMetaOut], name="get_compare_meta")
 async def get_compare_meta() -> dict[str, Any]:
-    """Priorities and stack archetypes, so the frontend does not hardcode them."""
+    """Priorities and stack archetypes, so the frontend does not hardcode them.
+
+    `balanced` is absent by design. Selecting nothing is the balanced
+    weighting, so offering it as a checkbox would be offering a box that does
+    nothing when ticked alongside any other.
+    """
     return ok(
         CompareMetaOut(
             priorities=[

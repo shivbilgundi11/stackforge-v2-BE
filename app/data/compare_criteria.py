@@ -13,20 +13,26 @@ Two kinds of criterion:
     (cost at 10M vectors, cost for this token mix). Never stored, because a
     hardcoded "cost: 7/10" is wrong the day a provider changes price.
 
-`priority` reweights. A comparison with one fixed weighting is an opinion; one
+`priorities` reweight. A comparison with one fixed weighting is an opinion; one
 that reweights is a tool — the honest answer to "which vector DB" genuinely
 does change depending on whether you are optimising for cost or for not being
 paged at 3am.
+
+Callers pass a *set* of priorities, because the real question is usually
+"cheap and portable" rather than one axis alone. There is no `balanced`
+member: balanced is the empty selection, which is what "no axis favoured"
+already meant. Keeping it as a value would have made it selectable alongside
+cost — a multiplier of 1.0 on every criterion, combining with everything and
+changing nothing.
 """
 
 from __future__ import annotations
 
 from typing import Literal, NamedTuple
 
-Priority = Literal["balanced", "cost", "scale", "speed", "simplicity", "control"]
+Priority = Literal["cost", "scale", "speed", "simplicity", "control"]
 
 PRIORITIES: tuple[Priority, ...] = (
-    "balanced",
     "cost",
     "scale",
     "speed",
@@ -41,7 +47,9 @@ class Criterion(NamedTuple):
     description: str
     kind: Literal["fact", "computed"]
     # Base weight, then per-priority multipliers. A multiplier of 0 drops the
-    # criterion entirely for that priority.
+    # criterion entirely for that priority. Several selected priorities combine
+    # as the geometric mean of their multipliers — see `_multiplier` in
+    # `app/services/compare_service.py`.
     weight: float
     weights: dict[str, float]
     # For `fact` criteria: which `facts` key, its natural maximum, and whether

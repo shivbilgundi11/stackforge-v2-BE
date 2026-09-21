@@ -565,8 +565,9 @@ async def test_compare_meta_lists_priorities_and_archetypes(
     response = await client.get("/api/v1/tools/compare/meta")
     data = response.json()["data"]
 
+    # No "balanced": selecting nothing is the balanced weighting, so it is not
+    # offered as something to select alongside the others.
     assert {p["key"] for p in data["priorities"]} == {
-        "balanced",
         "cost",
         "scale",
         "speed",

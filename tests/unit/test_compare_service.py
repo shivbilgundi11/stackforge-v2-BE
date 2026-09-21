@@ -1,8 +1,12 @@
 """Comparison scoring.
 
 The two properties worth guarding: reweighting genuinely changes the answer
-(otherwise `priority` is decoration), and `switch_when` is never empty
+(otherwise `priorities` is decoration), and `switch_when` is never empty
 (otherwise the tool is a leaderboard).
+
+Since the field became a set, a third: combining priorities has to behave at
+both ends. More of them must not collapse the comparison onto one axis, and
+must not wash it back out to no weighting at all.
 """
 
 from __future__ import annotations
@@ -12,7 +16,11 @@ from decimal import Decimal
 
 import pytest
 
-from app.data.compare_criteria import PRIORITIES, STACK_ARCHETYPES_BY_KEY
+from app.data.compare_criteria import (
+    CRITERIA_BY_TOOL,
+    PRIORITIES,
+    STACK_ARCHETYPES_BY_KEY,
+)
 from app.schemas.catalog import ModelOut, ProvenanceOut, ToolOut
 from app.services import compare_service
 
@@ -139,20 +147,137 @@ def test_reweighting_changes_the_winner() -> None:
         input_tokens=2000,
         output_tokens=500,
         requests_per_day=1000,
-        priority="cost",
+        priorities=["cost"],
     )
     by_scale = compare_service.compare_models(
         models=[CHEAP, MID, PREMIUM],
         input_tokens=2000,
         output_tokens=500,
         requests_per_day=1000,
-        priority="scale",
+        priorities=["scale"],
     )
 
     # The documented case the definition of done asks for: same three models,
     # same usage profile, different winner.
     assert by_cost.metrics["winner"] == "cheap"
     assert by_scale.metrics["winner"] == "premium"
+
+
+def test_no_priorities_is_the_balanced_weighting() -> None:
+    """Selecting nothing is exactly what `balanced` used to be."""
+    result = compare_service.compare_models(
+        models=[CHEAP, MID, PREMIUM],
+        input_tokens=2000,
+        output_tokens=500,
+        requests_per_day=1000,
+        priorities=[],
+    )
+    weights = {row["criterion"]: row["weight"] for row in result.tables["matrix"]}
+
+    # Every multiplier is 1.0, so the normalised weights are just the base
+    # weights over their total. Nothing is favoured.
+    criteria = CRITERIA_BY_TOOL["compare-models"]
+    total = sum(c.weight for c in criteria)
+    for criterion in criteria:
+        assert weights[criterion.key] == pytest.approx(criterion.weight / total, abs=5e-5)
+
+    assert result.metrics["priority"] == "balanced"
+
+
+def test_one_priority_weights_exactly_as_it_did_before_the_field_took_a_set() -> None:
+    """The geometric mean of a single multiplier is that multiplier."""
+    result = compare_service.compare_models(
+        models=[CHEAP, MID, PREMIUM],
+        input_tokens=2000,
+        output_tokens=500,
+        requests_per_day=1000,
+        priorities=["cost"],
+    )
+    weights = {row["criterion"]: row["weight"] for row in result.tables["matrix"]}
+
+    criteria = CRITERIA_BY_TOOL["compare-models"]
+    raw = {c.key: c.weight * c.weights["cost"] for c in criteria}
+    total = sum(raw.values())
+    for key, value in raw.items():
+        assert weights[key] == pytest.approx(value / total, abs=5e-5)
+
+
+def test_two_priorities_land_between_the_two_single_weightings() -> None:
+    """The product compounds and the arithmetic mean washes out; this is neither.
+
+    A criterion one priority triples and the other leaves alone has to end up
+    genuinely lifted and genuinely below the tripling. `monthly_cost` is x3.0
+    under cost and x1.0 under scale; `scale_ceiling` is x0.6 under cost and
+    x3.0 under scale — two criteria pulling opposite ways is the case worth
+    asserting on.
+    """
+    by_key = {c.key: c for c in CRITERIA_BY_TOOL["compare-vector-db"]}
+    assert by_key["monthly_cost"].weights["cost"] == 3.0
+    assert by_key["scale_ceiling"].weights["scale"] == 3.0
+
+    def weights_for(priorities: list[str]) -> dict[str, float]:
+        result = compare_service.compare_vector_db(
+            tools=[PINECONE, QDRANT, PGVECTOR],
+            vector_count=1_000_000,
+            dimensions=1536,
+            priorities=priorities,  # type: ignore[arg-type]
+        )
+        return {row["criterion"]: row["weight"] for row in result.tables["matrix"]}
+
+    cost_only = weights_for(["cost"])
+    scale_only = weights_for(["scale"])
+    both = weights_for(["cost", "scale"])
+
+    assert scale_only["monthly_cost"] < both["monthly_cost"] < cost_only["monthly_cost"]
+    assert cost_only["scale_ceiling"] < both["scale_ceiling"] < scale_only["scale_ceiling"]
+
+
+def test_a_third_priority_does_not_let_one_criterion_run_away() -> None:
+    """Under a product, stacking aligned priorities flattens everything else.
+
+    cost, simplicity and control all push on `ops_burden` and `vendor_lock_in`.
+    Multiplied, those reach x9 and normalise the rest of the matrix to noise.
+    """
+    result = compare_service.compare_vector_db(
+        tools=[PINECONE, QDRANT, PGVECTOR],
+        vector_count=1_000_000,
+        dimensions=1536,
+        priorities=["cost", "simplicity", "control"],
+    )
+    weights = [row["weight"] for row in result.tables["matrix"]]
+
+    assert max(weights) < 0.4, "one criterion should not swamp the matrix"
+    assert min(weights) > 0.01, "no criterion should be normalised out of existence"
+
+
+def test_duplicate_priorities_are_not_a_different_question() -> None:
+    def winner_for(priorities: list[str]) -> str:
+        return str(
+            compare_service.compare_models(
+                models=[CHEAP, MID, PREMIUM],
+                input_tokens=2000,
+                output_tokens=500,
+                requests_per_day=1000,
+                priorities=priorities,  # type: ignore[arg-type]
+            ).metrics["winner"]
+        )
+
+    assert winner_for(["cost", "cost"]) == winner_for(["cost"])
+
+
+def test_the_weighting_is_named_in_prose_and_in_metrics() -> None:
+    """ "wins on a  weighting" is a bug. The label is what stops it happening."""
+    result = compare_service.compare_models(
+        models=[CHEAP, MID, PREMIUM],
+        input_tokens=2000,
+        output_tokens=500,
+        requests_per_day=1000,
+        priorities=["cost", "speed"],
+    )
+    why = next(r for r in result.tables["rationale"] if r["kind"] == "why")
+
+    assert result.metrics["priority"] == "cost and speed"
+    assert "cost and speed weighting" in why["text"]
 
 
 @pytest.mark.parametrize("priority", PRIORITIES)
@@ -162,7 +287,7 @@ def test_every_priority_produces_a_ranking_and_a_switch_when(priority: str) -> N
         input_tokens=2000,
         output_tokens=500,
         requests_per_day=1000,
-        priority=priority,  # type: ignore[arg-type]
+        priorities=[priority],  # type: ignore[list-item]
     )
     switch = [r for r in result.tables["rationale"] if r["kind"] == "switch_when"]
 
@@ -260,7 +385,7 @@ def test_simplicity_priority_favours_the_managed_option() -> None:
         tools=[PINECONE, QDRANT, PGVECTOR],
         vector_count=10_000_000,
         dimensions=1536,
-        priority="simplicity",
+        priorities=["simplicity"],
     )
     assert result.metrics["winner"] == "pinecone"
 
@@ -270,7 +395,7 @@ def test_control_priority_favours_a_self_hostable_option() -> None:
         tools=[PINECONE, QDRANT, PGVECTOR],
         vector_count=10_000_000,
         dimensions=1536,
-        priority="control",
+        priorities=["control"],
     )
     winner = next(row for row in result.tables["options"] if row["id"] == result.metrics["winner"])
     assert winner["self_hostable"] is True
@@ -339,7 +464,7 @@ def test_speed_priority_favours_the_fastest_to_deploy() -> None:
             STACK_ARCHETYPES_BY_KEY["mvp"],
             STACK_ARCHETYPES_BY_KEY["self-hosted"],
         ],
-        priority="speed",
+        priorities=["speed"],
     )
     assert result.metrics["winner"] == "mvp"
 
@@ -469,3 +594,30 @@ def test_adding_a_criterion_changes_the_output_with_no_code_change() -> None:
 
     assert len(after.tables["matrix"]) == len(before.tables["matrix"]) + 1
     assert any(row["criterion"] == "invented" for row in after.tables["matrix"])
+
+
+def test_switch_when_does_not_suggest_a_priority_already_selected() -> None:
+    """A visibly wrong suggestion makes the rest of the rationale look generated."""
+    result = compare_service.compare_models(
+        models=[CHEAP, MID, PREMIUM],
+        input_tokens=2000,
+        output_tokens=500,
+        requests_per_day=1000,
+        priorities=["cost", "scale"],
+    )
+    switch = [r["text"] for r in result.tables["rationale"] if r["kind"] == "switch_when"]
+
+    assert switch, "a comparison without switch_when is a leaderboard"
+    assert not any(text.startswith("Add ") for text in switch)
+
+    partial = compare_service.compare_models(
+        models=[CHEAP, MID, PREMIUM],
+        input_tokens=2000,
+        output_tokens=500,
+        requests_per_day=1000,
+        priorities=["cost"],
+    )
+    offered = " ".join(r["text"] for r in partial.tables["rationale"] if r["kind"] == "switch_when")
+
+    assert "Add scale" in offered
+    assert "Add cost" not in offered

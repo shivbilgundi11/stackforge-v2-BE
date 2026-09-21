@@ -17,6 +17,7 @@ it is wrong and nobody knows.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from decimal import ROUND_HALF_UP, Decimal
 from typing import Any
 
@@ -87,16 +88,86 @@ def _normalise_higher_is_better(values: list[float]) -> list[float]:
     return [100.0 * (value - low) / (high - low) for value in values]
 
 
-def _weights(criteria: tuple[Criterion, ...], priority: Priority) -> dict[str, float]:
-    raw = {c.key: c.weight * c.weights.get(priority, 1.0) for c in criteria}
+def _multiplier(criterion: Criterion, priorities: Sequence[Priority]) -> float:
+    """Combine one criterion's per-priority multipliers into one number.
+
+    The geometric mean, not the product and not the arithmetic mean, and the
+    difference matters at both ends.
+
+    The product compounds: cost, simplicity and control together would put
+    `vendor_lock_in` at 1.2 x 0.5 x 3.0 and `ops_burden` at 0.7 x 3.0 x 0.4,
+    and a few aligned picks can reach x9 on one criterion, which normalises
+    every other criterion to roughly nothing. Selecting more of what you care
+    about would narrow the comparison to a single axis.
+
+    The arithmetic mean has the opposite failure: averaging drags every
+    multiplier toward 1.0, so the more priorities you state the closer the
+    result gets to stating none.
+
+    The geometric mean is the one that behaves. It is exactly the old
+    single-priority multiplier when one is selected, it is 1.0 when none is —
+    which is what `balanced` used to mean — and a x3.0 paired with a x0.4
+    lands at x1.1 rather than x1.2 or x1.7, so an emphasis and a de-emphasis
+    of equal force cancel instead of one winning.
+    """
+    if not priorities:
+        return 1.0
+    product = 1.0
+    for priority in priorities:
+        product *= criterion.weights.get(priority, 1.0)
+    # `float ** float` is typed as returning Any; the cast is for mypy, not
+    # for arithmetic.
+    return float(product ** (1.0 / len(priorities)))
+
+
+def _weights(criteria: tuple[Criterion, ...], priorities: Sequence[Priority]) -> dict[str, float]:
+    raw = {c.key: c.weight * _multiplier(c, priorities) for c in criteria}
     total = sum(raw.values()) or 1.0
     return {key: value / total for key, value in raw.items()}
+
+
+def _try_instead(priorities: Sequence[Priority], offers: dict[Priority, str]) -> list[str]:
+    """The "try a different weighting" line, minus whatever is already on.
+
+    This used to read "Re-run with priority=cost if budget is the binding
+    constraint" whether or not the run was already weighted by cost. That was
+    survivable while the field held one value and the line was easy to skim
+    past. It is not survivable now: a reader who has ticked Cost and Scale can
+    see the tool telling them to tick Cost, and a suggestion that is visibly
+    wrong makes the rest of the rationale look generated rather than reasoned.
+    """
+    missing = [p for p in offers if p not in priorities]
+    if not missing:
+        # Everything on offer is already selected, and `switch_when` still has
+        # to say something — an empty one is the leaderboard this tool exists
+        # not to be. Subtracting a priority is the remaining useful move.
+        return [
+            "Every axis this comparison can reweight is already selected. Clear "
+            "one to see how much of this result was resting on it."
+        ]
+    clauses = [f"{p} if {offers[p]}" for p in missing]
+    tail = " — they can be selected together." if len(missing) > 1 else "."
+    return [f"Add {', or '.join(clauses)} to the priorities{tail}"]
+
+
+def _weighting_label(priorities: Sequence[Priority]) -> str:
+    """How the weighting is named in prose and in `metrics`.
+
+    No selection is still called "balanced" here. The word was worth keeping in
+    the output even after it stopped being an input: "wins on a balanced
+    weighting" is a sentence, and "wins on a  weighting" is a bug.
+    """
+    if not priorities:
+        return "balanced"
+    if len(priorities) == 1:
+        return priorities[0]
+    return f"{', '.join(priorities[:-1])} and {priorities[-1]}"
 
 
 def _assemble(
     *,
     tool_slug: str,
-    priority: Priority,
+    priorities: Sequence[Priority],
     options: list[dict[str, Any]],
     scores: dict[str, dict[str, float]],
     raw_values: dict[str, dict[str, str]],
@@ -106,7 +177,8 @@ def _assemble(
 ) -> ToolOutput:
     """Weight, rank, and package. Shared by all four comparisons."""
     criteria = CRITERIA_BY_TOOL[tool_slug]
-    weights = _weights(criteria, priority)
+    weights = _weights(criteria, priorities)
+    weighting = _weighting_label(priorities)
 
     totals: dict[str, float] = {}
     for option in options:
@@ -150,7 +222,7 @@ def _assemble(
         for criterion in criteria
     ]
 
-    rationale, tradeoffs, switch_when = rationale_for(winner, ranked, priority)
+    rationale, tradeoffs, switch_when = rationale_for(winner, ranked, weighting)
 
     all_warnings = list(warnings or [])
     if confidence == "low" and runner_up:
@@ -171,7 +243,12 @@ def _assemble(
             "winner_name": winner["name"],
             "confidence": confidence,
             "score": _score(totals[winner["id"]]),
-            "priority": priority,
+            # The label, not the list: `metrics` is a flat strip that exports
+            # and run history render verbatim, and one of them printing
+            # `['cost', 'scale']` at a reader is not an improvement. Runs
+            # stored before this field became a set still read correctly —
+            # they hold "cost", which is what a one-priority run holds now.
+            "priority": weighting,
             "options_compared": len(options),
         },
         tables={
@@ -212,7 +289,7 @@ def compare_models(
     output_tokens: int,
     requests_per_day: int,
     cached_input_ratio: Decimal = Decimal(0),
-    priority: Priority = "balanced",
+    priorities: Sequence[Priority] = (),
 ) -> ToolOutput:
     from app.services.cost_service import cost_per_request
 
@@ -278,12 +355,12 @@ def compare_models(
         }
 
     def rationale_for(
-        winner: dict[str, Any], ranked: list[dict[str, Any]], priority: Priority
+        winner: dict[str, Any], ranked: list[dict[str, Any]], weighting: str
     ) -> tuple[str, list[str], list[str]]:
         cheapest = min(ranked, key=lambda o: Decimal(o["monthly_cost"]))
         widest = max(ranked, key=lambda o: o["context_window"] or 0)
         why = (
-            f"{winner['name']} wins on a {priority} weighting at "
+            f"{winner['name']} wins on a {weighting} weighting at "
             f"${winner['monthly_cost']}/month for {requests_per_day:,} requests a day."
         )
         tradeoffs: list[str] = []
@@ -309,17 +386,22 @@ def compare_models(
         if cached := [o for o in ranked if o["id"] != winner["id"]]:
             tradeoffs.append(
                 f"Ranked above {', '.join(o['name'] for o in cached[:2])} on this "
-                f"weighting; a different priority may reorder them."
+                f"weighting; a different set of priorities may reorder them."
             )
-        switch.append(
-            "Re-run with priority=cost if budget is the binding constraint, or "
-            "priority=scale if context length is."
+        switch.extend(
+            _try_instead(
+                priorities,
+                {
+                    "cost": "budget is the binding constraint",
+                    "scale": "context length is",
+                },
+            )
         )
         return why, tradeoffs, switch
 
     return _assemble(
         tool_slug="compare-models",
-        priority=priority,
+        priorities=priorities,
         options=options,
         scores=scores,
         raw_values=raw,
@@ -336,7 +418,7 @@ def compare_vector_db(
     tools: list[ToolOut],
     vector_count: int,
     dimensions: int,
-    priority: Priority = "balanced",
+    priorities: Sequence[Priority] = (),
 ) -> ToolOutput:
     """Cost at the stated scale is computed, not asserted.
 
@@ -400,12 +482,12 @@ def compare_vector_db(
         }
 
     def rationale_for(
-        winner: dict[str, Any], ranked: list[dict[str, Any]], priority: Priority
+        winner: dict[str, Any], ranked: list[dict[str, Any]], weighting: str
     ) -> tuple[str, list[str], list[str]]:
         cheapest = min(ranked, key=lambda o: Decimal(o["monthly_cost"]))
         self_hosted = [o for o in ranked if o["self_hostable"] and o["id"] != winner["id"]]
         why = (
-            f"{winner['name']} wins on a {priority} weighting at "
+            f"{winner['name']} wins on a {weighting} weighting at "
             f"{vector_count:,} vectors x {dimensions} dimensions, costing about "
             f"${winner['monthly_cost']}/month."
         )
@@ -436,9 +518,14 @@ def compare_vector_db(
                 "At this corpus size, benchmark on your own data before committing "
                 "— published figures diverge sharply above 50M vectors."
             )
-        switch.append(
-            "Re-run with priority=simplicity to weight operational burden, or "
-            "priority=control to weight portability."
+        switch.extend(
+            _try_instead(
+                priorities,
+                {
+                    "simplicity": "operational burden is what you are short of",
+                    "control": "portability matters more than convenience",
+                },
+            )
         )
         return why, tradeoffs, switch
 
@@ -454,7 +541,7 @@ def compare_vector_db(
 
     return _assemble(
         tool_slug="compare-vector-db",
-        priority=priority,
+        priorities=priorities,
         options=options,
         scores=scores,
         raw_values=raw,
@@ -471,7 +558,7 @@ def compare_stacks(
     archetypes: list[StackArchetype],
     monthly_model_spend: Decimal = Decimal(500),
     blended_hourly_rate: Decimal = Decimal(120),
-    priority: Priority = "balanced",
+    priorities: Sequence[Priority] = (),
 ) -> ToolOutput:
     """12-month TCO includes engineering time, because it dominates.
 
@@ -536,12 +623,12 @@ def compare_stacks(
         }
 
     def rationale_for(
-        winner: dict[str, Any], ranked: list[dict[str, Any]], priority: Priority
+        winner: dict[str, Any], ranked: list[dict[str, Any]], weighting: str
     ) -> tuple[str, list[str], list[str]]:
         fastest = min(ranked, key=lambda o: o["setup_days"])
         cheapest = min(ranked, key=lambda o: _money_from(o["tco_12_month"]))
         why = (
-            f"{winner['name']} wins on a {priority} weighting: "
+            f"{winner['name']} wins on a {weighting} weighting: "
             f"${winner['tco_12_month']} over twelve months including engineering "
             f"time, live in {winner['setup_days']} days."
         )
@@ -569,7 +656,7 @@ def compare_stacks(
 
     return _assemble(
         tool_slug="compare-stacks",
-        priority=priority,
+        priorities=priorities,
         options=options,
         scores=scores,
         raw_values=raw,
@@ -588,7 +675,7 @@ def compare_build_vs_buy(
     maintenance_hours_per_month: Decimal,
     vendor_monthly: Decimal,
     vendor_integration_hours: int = 0,
-    priority: Priority = "balanced",
+    priorities: Sequence[Priority] = (),
 ) -> ToolOutput:
     """Build versus buy over 12, 24, and 36 months, with a sensitivity table.
 
@@ -716,12 +803,12 @@ def compare_build_vs_buy(
     ]
 
     def rationale_for(
-        winner: dict[str, Any], ranked: list[dict[str, Any]], priority: Priority
+        winner: dict[str, Any], ranked: list[dict[str, Any]], weighting: str
     ) -> tuple[str, list[str], list[str]]:
         flips = {row["winner"] for row in sensitivity}
         if winner["id"] == "buy":
             why = (
-                f"Buy wins on a {priority} weighting: {_usd(horizons[12][1])} against "
+                f"Buy wins on a {weighting} weighting: {_usd(horizons[12][1])} against "
                 f"{_usd(horizons[12][0])} over twelve months, and it is in production "
                 f"months earlier."
             )
@@ -732,7 +819,7 @@ def compare_build_vs_buy(
             ]
         else:
             why = (
-                f"Build wins on a {priority} weighting: {_usd(horizons[36][0])} against "
+                f"Build wins on a {weighting} weighting: {_usd(horizons[36][0])} against "
                 f"{_usd(horizons[36][1])} over three years."
             )
             tradeoffs = [
@@ -768,7 +855,7 @@ def compare_build_vs_buy(
 
     output = _assemble(
         tool_slug="compare-build-vs-buy",
-        priority=priority,
+        priorities=priorities,
         options=options,
         scores=scores,
         raw_values=raw,
