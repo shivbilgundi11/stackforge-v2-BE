@@ -637,27 +637,27 @@ def _readme(
         ),
         "api-key": (
             "Set `MCP_API_KEY` before starting. Over stdio the key protects the *upstream* "
-            "service — it is not client authentication, because the client is whichever "
+            "service, not client authentication, because the client is whichever "
             "process spawned this one and is already trusted by the operating system."
         ),
         "bearer": (
             "Set `MCP_BEARER_TOKEN` before starting. Over stdio this protects the upstream "
             "service, not this server. If you switch to an HTTP transport you need real "
-            "request authentication in front of it — the transport alone gives you none."
+            "request authentication in front of it. The transport alone gives you none."
         ),
     }[auth]
 
     transport_note = {
         "stdio": (
-            "`stdio` — the client starts this process and talks to it over pipes. This is "
+            "`stdio`: the client starts this process and talks to it over pipes. This is "
             "what Claude Desktop uses."
         ),
         "sse": (
-            "`sse` — served over HTTP. The process must be running before the client "
+            "`sse`: served over HTTP. The process must be running before the client "
             "connects, and it is reachable by anything that can reach the port."
         ),
         "streamable-http": (
-            "`streamable-http` — served over HTTP. The process must be running before the "
+            "`streamable-http`: served over HTTP. The process must be running before the "
             "client connects, and it is reachable by anything that can reach the port."
         ),
     }[transport]
@@ -734,7 +734,7 @@ def _warnings(
                 level="critical",
                 message=(
                     f"The generated server did not parse ({exc.msg} at line {exc.lineno}). "
-                    f"This is a bug in Buildtact — please flag it."
+                    f"This is a bug in Buildtact. Please flag it."
                 ),
             )
         )
@@ -764,7 +764,7 @@ def _warnings(
                 field="transport",
                 message=(
                     "An HTTP transport exposes this server to anything that can reach the "
-                    "port. The SDK does not authenticate requests for you — put real auth "
+                    "port. The SDK does not authenticate requests for you, so put real auth "
                     "in front of it before it leaves your machine."
                 ),
             )
@@ -776,7 +776,7 @@ def _warnings(
                 message=(
                     "Over stdio the credential protects the upstream service, not this "
                     "server: the client is the process that spawned it and is already "
-                    "trusted. That is fine — it is worth knowing which threat it covers."
+                    "trusted. That is fine, but it is worth knowing which threat it covers."
                 ),
             )
         )
@@ -829,7 +829,7 @@ def _sdk_interface_check() -> str | None:
         return (
             f"The installed MCP SDK no longer exposes {', '.join(missing)} on "
             f"{SDK_CLASS}. The generated server targets spec {MCP_SPEC_VERSION} and may "
-            f"not run against the newest SDK — please flag this."
+            f"not run against the newest SDK. Please flag this."
         )
     return None
 

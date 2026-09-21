@@ -193,7 +193,7 @@ async def _record_failure(
     if source.failure_count >= FAILURE_ALERT_THRESHOLD:
         message = (
             f"{source.name} has failed {source.failure_count} consecutive "
-            f"verification runs — the page may have moved or changed format."
+            f"verification runs. The page may have moved or changed format."
         )
         result.alerts.append(message)
         logger.error("pricing.source_alert", source=source.slug, message=message)

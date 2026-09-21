@@ -227,14 +227,14 @@ def trial_ending(*, to: str, name: str, plan: str, ends_at: datetime | None) -> 
             f"Your {plan} trial ends on {when}. Add a card to stay on {plan}:\n\n"
             f"{BILLING_URL}\n\n"
             "If you do nothing, your account moves to the Free plan. Nothing is "
-            "deleted — your projects and saved stacks stay where they are, and you "
+            "deleted, and your projects and saved stacks stay where they are, so you "
             "can still read and export them.\n"
         ),
         html=_wrap(
             f"Your {plan} trial ends {when}",
             f"<p>Hi {name}, your {plan} trial ends on {when}. Add a card to stay on "
             f"{plan}.</p><p>If you do nothing, your account moves to the Free plan. "
-            "Nothing is deleted — your projects and saved stacks stay where they are, "
+            "Nothing is deleted, and your projects and saved stacks stay where they are, "
             "and you can still read and export them.</p>",
             ("Add a card", BILLING_URL),
         ),
@@ -308,12 +308,12 @@ def deprecation_alert(*, to: str, name: str, tools: list[dict[str, str]]) -> Ema
     problem; "X is deprecated, and the catalog's replacement is Y" is a task.
     """
     lines = "\n".join(
-        f"  · {tool['name']} — {tool['status']}"
+        f"  · {tool['name']}: {tool['status']}"
         + (f", consider {tool['replacement']}" if tool.get("replacement") else "")
         for tool in tools
     )
     rows = "".join(
-        f"<li><strong>{tool['name']}</strong> — {tool['status']}"
+        f"<li><strong>{tool['name']}</strong>: {tool['status']}"
         + (f", consider {tool['replacement']}" if tool.get("replacement") else "")
         + "</li>"
         for tool in tools

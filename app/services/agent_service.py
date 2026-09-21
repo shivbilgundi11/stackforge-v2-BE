@@ -100,7 +100,7 @@ _REDUCTIONS: Final[dict[str, str]] = {
     "tool_schemas": (
         "Tool definitions are re-sent every turn. Cache the system block where the "
         "provider supports it, or split the roster so each agent only carries the "
-        "tools its role uses — a router agent with 4 tools and a worker with 6 costs "
+        "tools its role uses: a router agent with 4 tools and a worker with 6 costs "
         "far less than two agents carrying all 10."
     ),
     "base_prompt": (
@@ -113,7 +113,7 @@ _REDUCTIONS: Final[dict[str, str]] = {
     ),
     "tool_results": (
         "Tool output is dominating input. Truncate or summarise results before they "
-        "re-enter context — a 4,000-token API response usually has 200 useful tokens."
+        "re-enter context. A 4,000-token API response usually has 200 useful tokens."
     ),
     "model_output": (
         "Output is the dominant line, which is the healthy case: the model is doing "
@@ -412,7 +412,7 @@ def rate_limits(
                 unit="tok/min",
                 note=(
                     "Metered separately here, and the usual binding constraint on an "
-                    "agent loop — loops emit far more output per minute than chat does."
+                    "agent loop, because loops emit far more output per minute than chat does."
                 ),
             )
         )
@@ -442,7 +442,7 @@ def rate_limits(
             limit=client_ceiling,
             unit="req/min",
             note=(
-                f"{concurrency} in flight at {avg_request_seconds}s each. Self-imposed — "
+                f"{concurrency} in flight at {avg_request_seconds}s each. Self-imposed, so "
                 "no tier upgrade moves it."
             ),
         )
@@ -566,7 +566,7 @@ def _recommend_tier(
 
     top = provider.tiers[-1]
     return None, (
-        f"No published {provider.label} tier covers this workload — {top.label} is the "
+        f"No published {provider.label} tier covers this workload. {top.label} is the "
         f"ceiling. This is a conversation with sales about a negotiated limit, or a "
         f"second account or provider to spread the load across."
     )
@@ -596,11 +596,11 @@ def _backoff_plan(binding: _Constraint) -> list[dict[str, Any]]:
         {"parameter": "Base delay", "value": "1s"},
         {"parameter": "Multiplier", "value": "2x"},
         {"parameter": "Max delay", "value": "60s"},
-        {"parameter": "Jitter", "value": "Full — delay = random(0, computed)"},
+        {"parameter": "Jitter", "value": "Full: delay = random(0, computed)"},
         {"parameter": "Max attempts", "value": "5"},
         {
             "parameter": "Honour Retry-After",
-            "value": "Yes — the header overrides the computed delay",
+            "value": "Yes: the header overrides the computed delay",
         },
     ]
     if token_bound:
@@ -673,7 +673,7 @@ def _rate_limit_warnings(
                 f"Limits are {provider.label}'s published defaults for the "
                 f"{provider.model_family}, verified {provider.verified_on.isoformat()} "
                 f"against {provider.source_url}. Per-model and negotiated limits differ, "
-                f"and tiers can change without notice — your dashboard is authoritative."
+                f"and tiers can change without notice, so your dashboard is authoritative."
             ),
         )
     ]
@@ -706,7 +706,7 @@ def _rate_limit_warnings(
                 level="warning",
                 message=(
                     "The binding constraint is your own concurrency, not the provider's "
-                    "limits. Raising the tier changes nothing here — raise in-flight "
+                    "limits. Raising the tier changes nothing here. Raise in-flight "
                     "requests, or cut per-request latency."
                 ),
             )
@@ -905,7 +905,7 @@ def function_schema(*, tools: list[dict[str, Any]], target: str) -> ToolOutput:
             warnings.append(
                 ToolWarning(
                     level="critical",
-                    message=f"{name}: generated schema failed validation — {error}",
+                    message=f"{name}: generated schema failed validation. {error}",
                 )
             )
 
@@ -930,7 +930,7 @@ def function_schema(*, tools: list[dict[str, Any]], target: str) -> ToolOutput:
                 message=(
                     "OpenAI structured outputs (`strict: true`) require every property to "
                     "be listed in `required`. Optional parameters must be expressed as a "
-                    "nullable type instead — `strict` is emitted as false where that is "
+                    "nullable type instead. `strict` is emitted as false where that is "
                     "not the case."
                 ),
             )
@@ -943,7 +943,7 @@ def function_schema(*, tools: list[dict[str, Any]], target: str) -> ToolOutput:
                 message=(
                     f"{len(tools)} tool definitions are re-sent on every turn. Past about "
                     f"20, selection accuracy drops and the definitions start to dominate "
-                    f"input cost — check the agent cost calculator."
+                    f"input cost. Check the agent cost calculator."
                 ),
             )
         )
@@ -1041,7 +1041,7 @@ def _parameter_warnings(name: str, tool: dict[str, Any], description: str) -> li
                 level="warning",
                 message=(
                     f"{name} has little or no description. The description is what the "
-                    f"model selects on — an unclear one produces a tool that is called "
+                    f"model selects on, and an unclear one produces a tool that is called "
                     f"at the wrong moments, which reads as a model problem."
                 ),
             )

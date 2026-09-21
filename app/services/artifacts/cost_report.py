@@ -64,7 +64,7 @@ def shape_section(source: StackSource) -> str:
         verdict = (
             f"The floors the catalog records sum to **${known:,.0f}/month**, "
             f"{share}% of the ${budget:,} budget. Components with no recorded "
-            f"floor are usage-priced and contribute nothing to that figure — it "
+            f"floor are usage-priced and contribute nothing to that figure. It "
             f"is a floor, not a forecast."
         )
     elif budget > 0:
@@ -221,7 +221,7 @@ def _provenance_block(source: RunSource) -> str:
         )
 
     lines = "\n".join(
-        f"- **{entry.name}** — verified {entry.last_verified_at.strftime('%Y-%m-%d')} "
+        f"- **{entry.name}**: verified {entry.last_verified_at.strftime('%Y-%m-%d')} "
         f"({entry.age_days} days ago, {entry.variant}) · {entry.url}"
         for entry in provenance.sources
     )

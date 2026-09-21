@@ -38,7 +38,7 @@ Effort = Literal["low", "medium", "high"]
 #: the registry rather than one per prompt: the interesting question is "which
 #: build produced this output", and a per-prompt version answers a question
 #: nobody asks while making the comparison harder.
-PROMPT_VERSION: Final = "v5"
+PROMPT_VERSION: Final = "v6"
 
 # Models, by what the call is for. Named here rather than at the call site so
 # a re-tier is one edit — and so nothing in a route can pick a model.
@@ -140,7 +140,7 @@ _STR_LIST = {"type": "array", "items": {"type": "string"}}
 GROUNDING: Final = """\
 You are the explanation layer of an engineering planning tool. A deterministic \
 rule engine has already produced the answer below. Your job is to explain, \
-rank, and caveat what it produced — never to change it.
+rank, and caveat what it produced, never to change it.
 
 Rules you must follow:
 - Use only the tools, models, numbers, and options present in the grounding data.
@@ -149,7 +149,9 @@ Rules you must follow:
 wrong, say so in a caveat rather than correcting it.
 - If the grounding data does not support a claim, leave the claim out.
 - Write for a senior engineer who will check your reasoning. Be specific and brief; \
-no marketing language, no hedging filler."""
+no marketing language, no hedging filler.
+- Punctuate with commas, colons, semicolons and full stops. Never use an em dash \
+or an en dash, in prose or in a label."""
 
 
 def _system(role: str) -> str:
@@ -167,8 +169,8 @@ STACK_SYNTHESIS: Final = Prompt(
         "For this call: the engine has ranked candidate stacks and scored every "
         "dimension. The stack in `components` is rank 1; `alternatives` lists the "
         "rest, each with its own rank. Choose which of them to recommend by "
-        "returning its rank in `recommended_rank` — rank 1 unless another candidate "
-        "genuinely fits these requirements better — and explain why the one you "
+        "returning its rank in `recommended_rank`, which is rank 1 unless another "
+        "candidate genuinely fits these requirements better, and explain why the one you "
         "chose beats the others for these specific requirements. Name the real "
         "trade-off being made, and the condition under which the runner-up would be "
         "the better answer.\n\n"
@@ -253,7 +255,7 @@ RAG_ARCHITECTURE: Final = Prompt(
     max_tokens=3000,
     system=_system(
         "For this call: the engine has selected a component for every stage of a "
-        "RAG pipeline under hard constraints. Explain the design as a whole — what "
+        "RAG pipeline under hard constraints. Explain the design as a whole: what "
         "the shape of it is optimising for, which single stage most determines "
         "retrieval quality here, and what to measure first."
     ),
@@ -287,7 +289,7 @@ ARCHITECTURE_DOCUMENT: Final = Prompt(
     max_tokens=4000,
     system=_system(
         "For this call: write the prose sections of an architecture document for "
-        "the selected stack — an overview, the reasoning behind each major choice, "
+        "the selected stack: an overview, the reasoning behind each major choice, "
         "and the operational concerns someone inherits with it. Markdown body text "
         "only; no headings, the document assembles those."
     ),
@@ -304,7 +306,7 @@ COMPATIBILITY_RATIONALE: Final = Prompt(
     max_tokens=2500,
     system=_system(
         "For this call: the engine has scored a set of tools pairwise. Explain "
-        "what the weakest pairing means for the team that has to run it — the "
+        "what the weakest pairing means for the team that has to run it: the "
         "integration work it implies, what breaks first, and what has to be "
         "operated by hand. Engineering effort, not money: the grounding "
         "carries no prices and a paragraph about cost becomes a paragraph "

@@ -129,7 +129,7 @@ def load_file(path: Path) -> TemplateSeed:
     try:
         meta = yaml.safe_load(match.group(1)) or {}
     except yaml.YAMLError as error:
-        raise TemplateError(f"{path.name}: frontmatter is not valid YAML — {error}") from error
+        raise TemplateError(f"{path.name}: frontmatter is not valid YAML. {error}") from error
     if not isinstance(meta, dict):
         raise TemplateError(f"{path.name}: frontmatter must be a mapping.")
 
@@ -160,7 +160,7 @@ def load_file(path: Path) -> TemplateSeed:
         # The whole point of the category is that opening it loads the Stack
         # Architect form, and one that cannot do that is mis-filed.
         raise TemplateError(
-            f"{path.name}: a stack template needs a `stack_input` block — it is what "
+            f"{path.name}: a stack template needs a `stack_input` block, which is what "
             f"the 'Use this stack' button loads into the Architect."
         )
     if category == "code-starter" and not files:

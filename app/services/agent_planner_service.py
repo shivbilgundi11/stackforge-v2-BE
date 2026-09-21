@@ -169,7 +169,7 @@ def _sequential(tools: list[str], worker_count: int) -> tuple[list[Node], list[E
                 previous,
                 node_id,
                 "Step definition and the accumulated result so far. Receiver must return "
-                "`{result, succeeded, error?}` — never a bare string.",
+                "`{result, succeeded, error?}`, never a bare string.",
             )
         )
         previous = node_id
@@ -232,7 +232,7 @@ def _parallel(tools: list[str], worker_count: int) -> tuple[list[Node], list[Edg
             Edge(
                 node_id,
                 "aggregator",
-                "`{finding, evidence, confidence}`. Confidence is required — the aggregator "
+                "`{finding, evidence, confidence}`. Confidence is required, because the aggregator "
                 "cannot resolve a disagreement between two unqualified assertions.",
             )
         )
@@ -282,7 +282,7 @@ def _hierarchical(tools: list[str], worker_count: int) -> tuple[list[Node], list
             Edge(
                 "supervisor",
                 lead_id,
-                "An objective and a budget — step count and spend. A delegation with no "
+                "An objective and a budget: step count and spend. A delegation with no "
                 "budget is how a hierarchy runs away.",
             )
         )
@@ -376,7 +376,7 @@ GENERIC_FAILURES: Final[tuple[tuple[str, str, str], ...]] = (
         "Loop without termination",
         "high",
         "Cap total steps per task and per agent, and fail loudly at the cap. A step budget "
-        "is the only reliable stop condition — a model asked to decide when it is finished "
+        "is the only reliable stop condition, because a model asked to decide when it is finished "
         "will keep going.",
     ),
     (
@@ -414,7 +414,7 @@ STYLE_FAILURES: Final[dict[str, tuple[tuple[str, str, str], ...]]] = {
             "Duplicated work across workers",
             "high",
             "Partition the work in the dispatcher and make units disjoint by construction. "
-            "Workers cannot coordinate — they cannot see each other.",
+            "Workers cannot coordinate, because they cannot see each other.",
         ),
         (
             "Contradictory findings with no resolution",
@@ -462,7 +462,7 @@ STYLE_FAILURES: Final[dict[str, tuple[tuple[str, str, str], ...]]] = {
         (
             "Handoff ping-pong",
             "high",
-            "Cap handoffs per request — two is usually right — and escalate to a human at "
+            "Cap handoffs per request (two is usually right) and escalate to a human at "
             "the cap. Two specialists that each believe the other owns it will pass forever.",
         ),
         (
@@ -696,7 +696,7 @@ def _summary(
 
     parts = [
         f"{len(nodes)} agents arranged as {shape}, for: {goal.strip()[:200]}",
-        f"{workers} of them do the work; the rest coordinate, and coordination is not free — "
+        f"{workers} of them do the work; the rest coordinate, and coordination is not free. "
         f"at {_usd(_money(per_task))} per task it is the overhead you are buying "
         f"reliability with.",
     ]
@@ -726,7 +726,7 @@ def _plan_warnings(
                 level="info",
                 message=(
                     "Two agents is barely a topology. If one agent with these tools can do "
-                    "the job, it will be cheaper, faster, and far easier to debug — "
+                    "the job, it will be cheaper, faster, and far easier to debug. "
                     "multi-agent earns its cost when roles genuinely differ."
                 ),
             )
@@ -749,7 +749,7 @@ def _plan_warnings(
                 level="info",
                 message=(
                     f"{framework_note} are the usual first answer for a hierarchy and are "
-                    f"excluded here — the catalog marks them `caution`. Check the graveyard "
+                    f"excluded here, because the catalog marks them `caution`. Check the graveyard "
                     f"entry before overriding that."
                 ),
             )
@@ -761,7 +761,7 @@ def _plan_warnings(
                 level="warning",
                 message=(
                     "No framework in the catalog is currently recommendable for this shape. "
-                    "The topology stands on its own — it is implementable directly against "
+                    "The topology stands on its own, and is implementable directly against "
                     "a provider SDK."
                 ),
             )
@@ -773,7 +773,7 @@ def _plan_warnings(
                 level="warning",
                 message=(
                     f"At {len(nodes)} agents this is long-running work. A crash at the last "
-                    f"node restarts from zero unless state is durable — {durable.name} or "
+                    f"node restarts from zero unless state is durable. {durable.name} or "
                     f"equivalent belongs under this, not a for-loop in a request handler."
                 ),
             )
@@ -883,7 +883,7 @@ inside its agents, and an unwritten contract is the reason.
 ## Framework
 
 {
-        f"**{framework.name}** — {framework.description}"
+        f"**{framework.name}**: {framework.description}"
         if framework
         else "No catalog framework is currently recommendable for this shape; implement directly "
         "against a provider SDK."

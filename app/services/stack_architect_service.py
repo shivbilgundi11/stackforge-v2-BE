@@ -165,7 +165,7 @@ def _residency_reason(tool: ToolOut, region: str) -> str | None:
         )
     if region not in tool.residency:
         return (
-            f"{tool.name} is not operable in {region.upper()} — it is available in "
+            f"{tool.name} is not operable in {region.upper()}. It is available in "
             f"{', '.join(sorted(code.upper() for code in tool.residency))}."
         )
     return None
@@ -333,7 +333,7 @@ def eliminate(
                         tool.slug,
                         tool.name,
                         "model_hosting",
-                        f"{tool.name} is not open weights served by someone else — "
+                        f"{tool.name} is not open weights served by someone else, "
                         f"which is the shape you asked for.",
                     )
                 )
@@ -566,7 +566,7 @@ def approved_flags(candidate: Candidate, approved: frozenset[str]) -> list[ToolW
             level="warning",
             message=(
                 f"{tool.name} is not on your organization's approved tool list. "
-                "It is shown because it best fits your requirements — confirm "
+                "It is shown because it best fits your requirements, so confirm "
                 "with your team before adopting it."
             ),
         )
@@ -586,7 +586,7 @@ def _why(tool: ToolOut, role: Role, requirements: Requirements) -> str:
     if requirements.sensitivity in {"restricted", "regulated"} and tool.self_hostable:
         return f"Runs inside your network, which {requirements.sensitivity} data requires."
     if requirements.team_skill == "beginner" and float(facts.get("ops_burden", 3)) <= 2:
-        return "Lowest operational burden in its category — little to run or tune."
+        return "Lowest operational burden in its category, with little to run or tune."
     if requirements.scale_target in {"large", "xlarge"}:
         return (
             f"Credible at your scale target, and the highest-maturity option available "
@@ -621,7 +621,7 @@ def warnings_for(
                 ToolWarning(
                     level="warning",
                     message=(
-                        f"{pair.tool_a} and {pair.tool_b} score {pair.score}/100 together — "
+                        f"{pair.tool_a} and {pair.tool_b} score {pair.score}/100 together, "
                         f"the weakest pairing in this stack. " + (pair.notes or "")
                     ),
                 )
@@ -651,7 +651,7 @@ def warnings_for(
                 message=(
                     f"{count} tools were excluded by your {constraint.replace('_', ' ')} "
                     f"constraint before scoring. Hard constraints eliminate rather than "
-                    f"rank down — see the exclusions table."
+                    f"rank down. See the exclusions table."
                 ),
             )
         )
@@ -661,8 +661,8 @@ def warnings_for(
             ToolWarning(
                 level="critical",
                 message=(
-                    "No stack satisfies every constraint at once. Relax the tightest one — "
-                    "usually the budget or the sensitivity — and run it again."
+                    "No stack satisfies every constraint at once. Relax the tightest one, "
+                    "usually the budget or the sensitivity, and run it again."
                 ),
             )
         )
@@ -683,7 +683,7 @@ def rule_summary(candidate: Candidate, requirements: Requirements) -> str:
         f"${requirements.monthly_budget:,}/month budget, scoring "
         f"{candidate.score.total}/100. Built around {lead}, with every component "
         f"satisfying your {requirements.sensitivity} sensitivity and "
-        f"{requirements.deployment} deployment constraints — those eliminated options "
+        f"{requirements.deployment} deployment constraints, which eliminated options "
         f"rather than ranking them down, so nothing here is a compromise on them."
     )
 

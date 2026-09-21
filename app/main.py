@@ -67,7 +67,7 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
 app = FastAPI(
     title="Buildtact API",
     version="0.1.0",
-    description="AI engineering workbench — plan, compare, and cost AI stacks.",
+    description="AI engineering workbench: plan, compare, and cost AI stacks.",
     openapi_url="/openapi.json",
     docs_url="/docs" if not settings.is_production else None,
     redoc_url=None,

@@ -324,7 +324,7 @@ def enrichment(
                 ToolWarning(
                     level="info",
                     message=(
-                        "AI analysis is unavailable — you have used today's allowance on "
+                        "AI analysis is unavailable. You have used today's allowance on "
                         "this plan. Everything above is the rule engine's own output and "
                         "is complete; only the written commentary is missing."
                     ),

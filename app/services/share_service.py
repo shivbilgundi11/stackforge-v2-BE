@@ -114,7 +114,7 @@ async def create(
 
     title, _ = result_document.title_of(source)
     if artifact_type is not None and artifact_type in artifacts.BY_TYPE:
-        title = f"{title} — {artifacts.BY_TYPE[artifact_type].label}"
+        title = f"{title}: {artifacts.BY_TYPE[artifact_type].label}"
 
     link = ShareLink(
         user_id=user.id,

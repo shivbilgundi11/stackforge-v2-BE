@@ -27,7 +27,7 @@ TYPE = "cursor-rules"
 #: to see, and cheap to prevent with a sentence in front of the assistant.
 GOTCHAS: Final[dict[str, str]] = {
     "pgvector": (
-        "Create the HNSW or IVFFlat index explicitly — pgvector does a sequential "
+        "Create the HNSW or IVFFlat index explicitly. pgvector does a sequential "
         "scan without one and stays fast enough in development to hide it."
     ),
     "qdrant": (
@@ -72,7 +72,7 @@ GOTCHAS: Final[dict[str, str]] = {
     ),
     "anthropic-api": (
         "Prompt caching is a cache_control block on the content, not a parameter. "
-        "Set `max_tokens` deliberately — it is required and it bounds the bill."
+        "Set `max_tokens` deliberately. It is required and it bounds the bill."
     ),
     "openai-api": (
         "Structured output belongs in `response_format`, not in a prompt asking "
@@ -87,7 +87,7 @@ GOTCHAS: Final[dict[str, str]] = {
         "of 0.9 leaves no room for anything else on the card."
     ),
     "temporal": (
-        "Workflow code must be deterministic — no clock reads, no random, no "
+        "Workflow code must be deterministic: no clock reads, no random, no "
         "direct IO. Everything non-deterministic goes in an activity."
     ),
     "celery": (
@@ -107,7 +107,7 @@ def supports(source: Source) -> bool:
 
 def generate(source: StackSource) -> Artifact:
     components = "\n".join(
-        f"- **{tool.name}** ({tool.category.replace('-', ' ')}) — {tool.description}"
+        f"- **{tool.name}** ({tool.category.replace('-', ' ')}): {tool.description}"
         for tool in source.components
     )
     gotchas = _gotchas(source.components)
@@ -123,7 +123,7 @@ def generate(source: StackSource) -> Artifact:
 # {source.title}
 
 This project is built on a fixed stack. Do not introduce an alternative to any
-component listed below without being asked — a suggestion that swaps the vector
+component listed below without being asked. A suggestion that swaps the vector
 store is a suggestion to rewrite the retrieval layer.
 
 ## The stack
@@ -147,7 +147,7 @@ store is a suggestion to rewrite the retrieval layer.
 - Prefer the library already in the stack over adding one. If something is
   missing, say what is missing rather than reaching for a new dependency.
 - Every price, limit, and model name changes. Do not hardcode one in more than
-  one place, and do not assert one from memory — read it from configuration.
+  one place, and do not assert one from memory. Read it from configuration.
 - Async all the way down or sync all the way down. A blocking call inside an
   async handler stalls the whole event loop and is invisible until load.
 
@@ -200,7 +200,7 @@ def _avoid(source: StackSource) -> str:
     lines: list[str] = []
     for tool in source.deprecated:
         lines.append(
-            f"- Do not build further on **{tool.name}** — the catalog marks it "
+            f"- Do not build further on **{tool.name}**. The catalog marks it "
             f"{tool.status}: {tool.status_reason or 'no reason recorded'}."
             + (f" Alternatives: {', '.join(tool.alternatives)}." if tool.alternatives else "")
         )

@@ -201,7 +201,7 @@ async def run_recommend_stack(
                         level="critical",
                         message=(
                             "No stack satisfies every constraint at once. The exclusions "
-                            "table shows which constraint removed what — relaxing the "
+                            "table shows which constraint removed what. Relaxing the "
                             "tightest one is the fastest way to a result."
                         ),
                     )
@@ -334,7 +334,7 @@ def _synthesis_applier(
         for risk in data.get("risks") or []:
             level = {"high": "critical", "medium": "warning"}.get(str(risk.get("severity")), "info")
             output.warnings.append(
-                ToolWarning(level=level, message=f"{risk.get('risk')} — {risk.get('mitigation')}")
+                ToolWarning(level=level, message=f"{risk.get('risk')}: {risk.get('mitigation')}")
             )
 
     return apply

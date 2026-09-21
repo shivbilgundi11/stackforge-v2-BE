@@ -226,7 +226,7 @@ def docker_compose(
             message=(
                 f"{label} is a starter template. Secrets come from .env, volumes are "
                 "local, and the health checks assume a model that loads inside 60 "
-                "seconds — check that against yours before relying on it."
+                "seconds. Check that against yours before relying on it."
             ),
         )
     ]
@@ -370,7 +370,7 @@ def k8s_manifests(
             message=(
                 "Starter manifests. Requests and limits are derived from the VRAM "
                 "estimate and a standard headroom factor, not from a measurement of "
-                "your workload — load test before trusting them."
+                "your workload. Load test before trusting them."
             ),
         )
     ]

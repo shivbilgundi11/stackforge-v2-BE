@@ -175,7 +175,7 @@ async def add_comment(
             # One level of threading. A reply to a reply attaches to the root,
             # by refusal rather than by silent reparenting.
             raise ValidationFailed.on_field(
-                "parent_id", "Replies cannot be nested — reply to the top-level comment."
+                "parent_id", "Replies cannot be nested. Reply to the top-level comment."
             )
 
     comment = Comment(
@@ -292,7 +292,7 @@ async def resolve_comment(
         raise Forbidden("Viewers cannot resolve comments.")
     if comment.parent_id is not None:
         raise ValidationFailed.on_field(
-            "comment_id", "Resolve the top-level comment — replies follow it."
+            "comment_id", "Resolve the top-level comment. Replies follow it."
         )
     comment.resolved_at = utcnow() if resolved else None
     await db.flush()

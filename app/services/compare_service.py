@@ -146,7 +146,7 @@ def _try_instead(priorities: Sequence[Priority], offers: dict[Priority, str]) ->
             "one to see how much of this result was resting on it."
         ]
     clauses = [f"{p} if {offers[p]}" for p in missing]
-    tail = " — they can be selected together." if len(missing) > 1 else "."
+    tail = ". They can be selected together." if len(missing) > 1 else "."
     return [f"Add {', or '.join(clauses)} to the priorities{tail}"]
 
 
@@ -374,13 +374,13 @@ def compare_models(
             )
             switch.append(
                 f"Choose {cheapest['name']} if this workload is cost-bound and its "
-                f"quality is good enough on your evals — it is "
+                f"quality is good enough on your evals. It is "
                 f"{_usd(delta)}/month cheaper at this volume."
             )
         if widest["id"] != winner["id"] and widest["context_window"]:
             switch.append(
                 f"Choose {widest['name']} if prompts may exceed "
-                f"{winner['context_window']:,} tokens — it accepts "
+                f"{winner['context_window']:,} tokens, because it accepts "
                 f"{widest['context_window']:,}."
             )
         if cached := [o for o in ranked if o["id"] != winner["id"]]:
@@ -496,7 +496,7 @@ def compare_vector_db(
 
         if not winner["self_hostable"]:
             tradeoffs.append(
-                "Managed only — no self-hosting path if data residency or "
+                "Managed only, with no self-hosting path if data residency or "
                 "cost control later demands one."
             )
         if cheapest["id"] != winner["id"]:
@@ -515,8 +515,8 @@ def compare_vector_db(
             )
         if vector_count >= 50_000_000:
             switch.append(
-                "At this corpus size, benchmark on your own data before committing "
-                "— published figures diverge sharply above 50M vectors."
+                "At this corpus size, benchmark on your own data before committing. "
+                "Published figures diverge sharply above 50M vectors."
             )
         switch.extend(
             _try_instead(
@@ -645,7 +645,7 @@ def compare_stacks(
         if cheapest["id"] != winner["id"]:
             saving = _money_from(winner["tco_12_month"]) - _money_from(cheapest["tco_12_month"])
             switch.append(
-                f"Choose {cheapest['name']} if the twelve-month budget is fixed — "
+                f"Choose {cheapest['name']} if the twelve-month budget is fixed. "
                 f"it is {_usd(saving)} less."
             )
         switch.append(
@@ -837,7 +837,7 @@ def compare_build_vs_buy(
             )
         else:
             switch.append(
-                "Build never overtakes buy within ten years at these inputs — "
+                "Build never overtakes buy within ten years at these inputs. "
                 "the vendor price would have to roughly double to change that."
             )
         if len(flips) > 1:

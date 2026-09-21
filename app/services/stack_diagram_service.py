@@ -114,7 +114,7 @@ def document(
     )
     roadmap_section = (
         "\n".join(
-            f"{index}. **{step.get('title', '')}** — {step.get('detail', '')} "
+            f"{index}. **{step.get('title', '')}**: {step.get('detail', '')} "
             f"_({step.get('effort', 'effort not estimated')})_"
             for index, step in enumerate(roadmap, 1)
         )

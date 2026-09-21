@@ -157,12 +157,12 @@ OVERRIDES: dict[tuple[str, str], Override] = {
     ("langchain", "llamaindex"): Override(
         score=52,
         notes=(
-            "Both work, and plenty of codebases contain both — usually by accident. "
+            "Both work, and plenty of codebases contain both, usually by accident. "
             "Running the two side by side means two chunking implementations, two "
             "retriever abstractions, and two upgrade cadences for one job. Pick the "
             "one whose retrieval model you prefer and use its integrations."
         ),
-        warnings=("Overlapping responsibilities — prefer one as the primary framework",),
+        warnings=("Overlapping responsibilities: prefer one as the primary framework",),
     ),
     ("pgvector", "postgresql"): Override(
         score=98,
@@ -175,7 +175,7 @@ OVERRIDES: dict[tuple[str, str], Override] = {
     ),
     ("pgvector", "supabase"): Override(
         score=95,
-        notes="pgvector ships enabled on Supabase — no extension install, no separate service.",
+        notes="pgvector ships enabled on Supabase: no extension install, no separate service.",
     ),
     ("neon", "pgvector"): Override(
         score=93,
@@ -195,11 +195,11 @@ OVERRIDES: dict[tuple[str, str], Override] = {
     ("claude-agent-sdk", "openai-api"): Override(
         score=25,
         notes=(
-            "The Claude Agent SDK is Claude Code as a library — it targets the "
+            "The Claude Agent SDK is Claude Code as a library, and it targets the "
             "Anthropic API specifically. Pointing it at OpenAI means replacing the "
             "model layer, which is most of what the SDK provides."
         ),
-        warnings=("Not a supported combination — the SDK is Anthropic-specific",),
+        warnings=("Not a supported combination: the SDK is Anthropic-specific",),
     ),
     ("temporal", "langgraph"): Override(
         score=88,
@@ -208,7 +208,7 @@ OVERRIDES: dict[tuple[str, str], Override] = {
             "the retry and recovery boundary, LangGraph owns the agent's own state "
             "graph. Run each LangGraph invocation as a Temporal activity."
         ),
-        warnings=("Keep checkpoint ownership in one place — do not persist the same state twice",),
+        warnings=("Keep checkpoint ownership in one place: do not persist the same state twice",),
     ),
     ("chroma", "kubernetes"): Override(
         score=38,
@@ -223,10 +223,10 @@ OVERRIDES: dict[tuple[str, str], Override] = {
         score=45,
         notes=(
             "FAISS is a library, not a service. Deploying it means writing the "
-            "service around it — persistence, sharding, updates, and filtering are "
+            "service around it: persistence, sharding, updates, and filtering are "
             "all yours."
         ),
-        warnings=("No built-in persistence or metadata filtering — expect real engineering",),
+        warnings=("No built-in persistence or metadata filtering: expect real engineering",),
     ),
     ("modal", "vllm"): Override(
         score=90,
@@ -246,7 +246,7 @@ OVERRIDES: dict[tuple[str, str], Override] = {
     ("cloudflare-workers", "vllm"): Override(
         score=15,
         notes="Workers have no GPU and a constrained runtime. vLLM cannot run there.",
-        warnings=("Incompatible — Workers cannot host GPU inference",),
+        warnings=("Incompatible: Workers cannot host GPU inference",),
     ),
     ("cloudflare-workers", "postgresql"): Override(
         score=62,
@@ -255,7 +255,7 @@ OVERRIDES: dict[tuple[str, str], Override] = {
             "Postgres driver does not run in a V8 isolate. Plan the connection layer "
             "up front rather than discovering it at deploy time."
         ),
-        warnings=("Requires Hyperdrive or an HTTP driver — no raw TCP connections",),
+        warnings=("Requires Hyperdrive or an HTTP driver: no raw TCP connections",),
     ),
     ("langfuse", "langgraph"): Override(
         score=90,
@@ -268,7 +268,7 @@ OVERRIDES: dict[tuple[str, str], Override] = {
     ("autogpt", "kubernetes"): Override(
         score=20,
         warnings=(
-            "AutoGPT has no cost ceiling and no durable state — do not give it a "
+            "AutoGPT has no cost ceiling and no durable state, so do not give it a "
             "cluster and a budget",
         ),
     ),
@@ -279,7 +279,7 @@ OVERRIDES: dict[tuple[str, str], Override] = {
             "now does this correctly at the API layer. A semantic cache returns an "
             "answer to a question the user did not ask."
         ),
-        warnings=("Prefer provider prompt caching — semantic caching risks wrong answers",),
+        warnings=("Prefer provider prompt caching: semantic caching risks wrong answers",),
     ),
     ("redis", "upstash"): Override(
         score=70,
@@ -295,7 +295,7 @@ OVERRIDES: dict[tuple[str, str], Override] = {
             "ECK makes this tractable, but an Elasticsearch cluster is a system with "
             "its own capacity planning. Do not adopt it purely for vector search."
         ),
-        warnings=("Significant operational commitment — needs a dedicated owner",),
+        warnings=("Significant operational commitment: needs a dedicated owner",),
     ),
     ("milvus", "kubernetes"): Override(
         score=80,
@@ -308,14 +308,14 @@ OVERRIDES: dict[tuple[str, str], Override] = {
         score=94,
         notes=(
             "Two managed services with HTTP APIs and no connection pooling to think "
-            "about — the lowest-friction RAG deployment available, and priced "
+            "about, the lowest-friction RAG deployment available, and priced "
             "accordingly."
         ),
     ),
     ("ollama", "vercel"): Override(
         score=10,
         notes="Ollama runs models locally. Vercel functions have no GPU and no persistent host.",
-        warnings=("Incompatible — Ollama is a local runtime",),
+        warnings=("Incompatible: Ollama is a local runtime",),
     ),
     ("crewai", "temporal"): Override(
         score=48,
@@ -324,7 +324,7 @@ OVERRIDES: dict[tuple[str, str], Override] = {
             "abstraction hides where the non-determinism is, so activity boundaries "
             "are hard to place correctly."
         ),
-        warnings=("Determinism boundaries are unclear — wrap whole crews as single activities",),
+        warnings=("Determinism boundaries are unclear: wrap whole crews as single activities",),
     ),
     ("autogen", "langgraph"): Override(
         score=40,
@@ -341,7 +341,7 @@ OVERRIDES: dict[tuple[str, str], Override] = {
     ("qdrant", "railway"): Override(
         score=76,
         notes=(
-            "Qdrant deploys cleanly as a Railway container. Attach a volume — the "
+            "Qdrant deploys cleanly as a Railway container. Attach a volume, because the "
             "default ephemeral filesystem loses the index on redeploy."
         ),
         warnings=("Attach a persistent volume or the index is lost on every deploy",),
@@ -352,12 +352,12 @@ OVERRIDES: dict[tuple[str, str], Override] = {
             "DuckDB is in-process and single-writer. On Kubernetes each replica gets "
             "its own database, which is almost never what was intended."
         ),
-        warnings=("In-process and single-writer — does not share state across replicas",),
+        warnings=("In-process and single-writer: does not share state across replicas",),
     ),
     ("sqlite", "kubernetes"): Override(
         score=35,
         notes="Same shape as DuckDB: a file per pod, and no shared state between replicas.",
-        warnings=("A file-per-pod database — use Postgres for multi-replica services",),
+        warnings=("A file-per-pod database: use Postgres for multi-replica services",),
     ),
     ("openai-api", "vllm"): Override(
         score=82,
@@ -373,7 +373,7 @@ OVERRIDES: dict[tuple[str, str], Override] = {
     ),
     ("clickhouse", "langfuse"): Override(
         score=88,
-        notes="Langfuse uses ClickHouse for trace storage — the intended pairing at volume.",
+        notes="Langfuse uses ClickHouse for trace storage, the intended pairing at volume.",
     ),
     ("opentelemetry", "langfuse"): Override(
         score=90,

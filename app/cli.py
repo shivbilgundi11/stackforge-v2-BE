@@ -63,7 +63,7 @@ def _seed() -> None:
             print(f"\n{len(report.unmanaged)} row(s) the seed no longer describes:")
             for row in report.unmanaged:
                 print(f"  {row}")
-            print("Usually a renamed id. Nothing was deleted — decide and edit the seed.")
+            print("Usually a renamed id. Nothing was deleted. Decide and edit the seed.")
 
     asyncio.run(run())
 

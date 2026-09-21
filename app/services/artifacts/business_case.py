@@ -51,7 +51,7 @@ def generate(source: RunSource) -> Artifact:
         type=TYPE,
         format="markdown",
         filename="business-case.md",
-        content=f"""# Business case — {source.title}
+        content=f"""# Business case: {source.title}
 
 Prepared from Buildtact run `{source.id}` on
 {output.created_at.strftime("%Y-%m-%d")}.
@@ -73,7 +73,7 @@ Prepared from Buildtact run `{source.id}` on
 ---
 
 Every figure above is arithmetic over the assumptions listed, not a forecast.
-Change an assumption and the case changes with it — which is the point of
+Change an assumption and the case changes with it, which is the point of
 listing them rather than burying them.
 """,
         language="markdown",
@@ -90,12 +90,12 @@ def _assumptions(rows: list[dict[str, Any]], inputs: dict[str, Any]) -> str:
     """
     if rows:
         return "\n".join(
-            f"- **{row.get('assumption', '')}** — {row.get('value', '')}" for row in rows
+            f"- **{row.get('assumption', '')}**: {row.get('value', '')}" for row in rows
         )
     if not inputs:
         return "_No assumptions were recorded for this run._"
     return "\n".join(
-        f"- **{key.replace('_', ' ').capitalize()}** — {_scalar(value)}"
+        f"- **{key.replace('_', ' ').capitalize()}**: {_scalar(value)}"
         for key, value in inputs.items()
     )
 

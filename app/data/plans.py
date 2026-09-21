@@ -79,14 +79,14 @@ FEATURES: Final[tuple[FeatureSpec, ...]] = (
         key=Feature.EXPORT_MARKDOWN,
         label="Markdown export",
         minimum_plan=Plan.FREE,
-        pitch="The whole answer as Markdown — every figure, table, and source on the page.",
+        pitch="The whole answer as Markdown: every figure, table, and source on the page.",
     ),
     FeatureSpec(
         key=Feature.EXPORT_JSON,
         label="JSON export",
         minimum_plan=Plan.PRO,
         pitch=(
-            "The full result as structured data, with a versioned envelope — "
+            "The full result as structured data, with a versioned envelope, ready "
             "for a pipeline, a diff, or a script."
         ),
     ),
@@ -108,7 +108,7 @@ FEATURES: Final[tuple[FeatureSpec, ...]] = (
         minimum_plan=Plan.PRO,
         pitch=(
             "A laid-out, paginated document with a cover page and your share link "
-            "in the footer — the version you send to a client."
+            "in the footer. The version you send to a client."
         ),
     ),
     FeatureSpec(
@@ -130,7 +130,7 @@ FEATURES: Final[tuple[FeatureSpec, ...]] = (
         key=Feature.SHARE_LINKS,
         label="Share links",
         minimum_plan=Plan.FREE,
-        pitch="A public link to a result that opens logged out — and that you can revoke.",
+        pitch="A public link to a result that opens logged out, and that you can revoke.",
     ),
     FeatureSpec(
         key=Feature.PROJECTS,

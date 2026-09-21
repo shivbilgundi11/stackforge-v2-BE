@@ -277,9 +277,7 @@ class Settings(BaseSettings):
                 "Move the comment to its own line above SMTP_PASSWORD."
             )
         if self.email_provider == "smtp" and "CHANGEME" in f"{self.smtp_user}{self.email_from}":
-            problems.append(
-                "SMTP_USER / EMAIL_FROM still contain the CHANGEME placeholder."
-            )
+            problems.append("SMTP_USER / EMAIL_FROM still contain the CHANGEME placeholder.")
         if self.smtp_tls and self.smtp_ssl:
             problems.append(
                 "SMTP_TLS and SMTP_SSL are mutually exclusive. "

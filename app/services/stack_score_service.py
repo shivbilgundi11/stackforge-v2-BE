@@ -58,7 +58,7 @@ DIMENSIONS: Final[tuple[Dimension, ...]] = (
         "production_readiness",
         "Production readiness",
         Decimal("0.12"),
-        "Catalog maturity — how much of this has been run in anger by other people.",
+        "Catalog maturity: how much of this has been run in anger by other people.",
     ),
     Dimension(
         "security_readiness",

@@ -1218,7 +1218,7 @@ async def change_seats(
     if seats < used:
         raise ValidationFailed.on_field(
             "seats",
-            f"The team has {used} members — remove members before reducing seats.",
+            f"The team has {used} members. Remove members before reducing seats.",
         )
 
     subscription = await db.scalar(

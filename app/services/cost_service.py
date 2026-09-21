@@ -200,7 +200,7 @@ def _cost_report(
     alternatives: list[dict[str, Any]],
 ) -> Artifact:
     lines = [
-        f"# Cost estimate — {model.display_name}",
+        f"# Cost estimate: {model.display_name}",
         "",
         f"- **Per request:** ${per_request}",
         f"- **Daily:** {_usd(daily)}",
@@ -403,8 +403,8 @@ def embedding_cost(
                 level="info",
                 message=(
                     f"{model.display_name} produces {model.dimensions}-dimension "
-                    f"vectors. Embedding is cheap; storing and searching them is not "
-                    f"— check the vector-database estimate before committing."
+                    f"vectors. Embedding is cheap; storing and searching them is not. "
+                    f"Check the vector-database estimate before committing."
                 ),
             )
         )

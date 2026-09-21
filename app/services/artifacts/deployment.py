@@ -304,7 +304,7 @@ EMBEDDED: Final[dict[str, str]] = {
     "duckdb": "an embedded analytical database",
     "chroma": "runs embedded by default; the service below is the client/server mode",
     "gptcache": "a library that wraps your model client",
-    "celery": "workers run your own image — add them alongside the app service",
+    "celery": "workers run your own image, so add them alongside the app service",
 }
 
 

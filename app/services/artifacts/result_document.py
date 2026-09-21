@@ -82,7 +82,7 @@ def _warnings(source: RunSource) -> str:
     if not warnings:
         return ""
     lines = "\n".join(
-        f"- **{LEVEL_LABELS.get(warning.level, 'Note')}** — {warning.message}"
+        f"- **{LEVEL_LABELS.get(warning.level, 'Note')}**: {warning.message}"
         for warning in sorted(
             warnings,
             # Critical first. A list that opens with three informational notes
@@ -113,7 +113,7 @@ def _provenance(source: RunSource) -> str:
         )
 
     lines = "\n".join(
-        f"- **{entry.name}** — verified {entry.last_verified_at.strftime('%Y-%m-%d')} "
+        f"- **{entry.name}**: verified {entry.last_verified_at.strftime('%Y-%m-%d')} "
         f"({entry.age_days} days ago, {entry.variant}) · {entry.url}"
         for entry in provenance.sources
     )

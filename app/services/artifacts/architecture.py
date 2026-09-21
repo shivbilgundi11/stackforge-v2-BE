@@ -103,7 +103,7 @@ def _summary(source: StackSource) -> str:
     names = [tool.name for tool in source.components]
     lead = names[0] if names else "no components"
     return (
-        f"**{source.title}** — a {source.requirements.use_case} stack for "
+        f"**{source.title}**: a {source.requirements.use_case} stack for "
         f"{source.requirements.scale_target} scale on a "
         f"${source.requirements.monthly_budget:,}/month budget, scoring "
         f"{source.score.total}/100 against today's catalog. Built around {lead}. "
@@ -136,7 +136,7 @@ def _compatibility_section(source: StackSource) -> str:
             "\n## Compatibility\n\n"
             "This stack has fewer than two components with reviewed pairings, so "
             "there is nothing to report. An unreported pairing is not a compatible "
-            "one — it is one nobody has checked.\n"
+            "one. It is one nobody has checked.\n"
         )
 
     rows = "\n".join(
