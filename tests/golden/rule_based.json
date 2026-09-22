@@ -1,0 +1,2914 @@
+{
+  "agent-cost": {
+    "artifacts": [],
+    "metrics": {
+      "biggest_contributor": "Model output",
+      "cost_per_day": "0.51",
+      "cost_per_month": "15.51",
+      "cost_per_task": "0.002548",
+      "cost_per_year": "186.10",
+      "retry_premium_monthly": "1.41",
+      "schema_overhead_pct": "15.9",
+      "tokens_per_task": 10640
+    },
+    "series": {},
+    "tables": {
+      "agents": [
+        {
+          "cost_per_month": "$15.51",
+          "cost_per_task": "$0.002548",
+          "instances": 1,
+          "model": "GPT-4o Mini",
+          "role": "planner",
+          "steps_per_task": 4
+        }
+      ],
+      "breakdown": [
+        {
+          "cost_per_task": "$0.00099",
+          "line": "Base prompt",
+          "share_of_cost": "38.9%",
+          "tokens_per_task": 6000
+        },
+        {
+          "cost_per_task": "$0.000238",
+          "line": "Tool definitions",
+          "share_of_cost": "9.3%",
+          "tokens_per_task": 1440
+        },
+        {
+          "cost_per_task": "$0.000264",
+          "line": "Tool results",
+          "share_of_cost": "10.4%",
+          "tokens_per_task": 1600
+        },
+        {
+          "cost_per_task": "$0.001056",
+          "line": "Model output",
+          "share_of_cost": "41.5%",
+          "tokens_per_task": 1600
+        }
+      ]
+    },
+    "tool_slug": "agent-cost",
+    "warnings": [
+      {
+        "field": null,
+        "level": "info",
+        "message": "Largest line is model output. Output is the dominant line, which is the healthy case: the model is doing work rather than re-reading its own instructions. A smaller model for the mechanical steps is the remaining lever."
+      }
+    ]
+  },
+  "chunk-estimate": {
+    "artifacts": [],
+    "metrics": {
+      "chunks_per_document": 6,
+      "duplication_factor": "1.28",
+      "embedded_tokens": 15360000,
+      "overlap_pct": "12.5",
+      "recommended_chunk_size": 512,
+      "recommended_overlap": 76,
+      "retrieval_quality": 100,
+      "source_tokens": 12000000,
+      "total_chunks": 30000
+    },
+    "series": {},
+    "tables": {
+      "quality_factors": [
+        {
+          "detail": "Configuration is sound",
+          "factor": "No penalties",
+          "impact": "0"
+        }
+      ]
+    },
+    "tool_slug": "chunk-estimate",
+    "warnings": []
+  },
+  "chunking-strategy": {
+    "artifacts": [],
+    "metrics": {
+      "chunk_size": 512,
+      "overlap": 76,
+      "reasoning": "Keeps headings with their content, so a retrieved chunk carries its own context.",
+      "score": 95,
+      "strategy": "Markdown-aware",
+      "strategy_key": "markdown"
+    },
+    "series": {},
+    "tables": {
+      "alternatives": [
+        {
+          "score": 60,
+          "strategy": "Recursive character",
+          "tradeoff": "Splits on the largest natural boundary that fits, falling back through paragraph, sentence, word. The sane default when the corpus is mixed."
+        },
+        {
+          "score": 50,
+          "strategy": "Fixed-size",
+          "tradeoff": "Predictable cost and index size. Splits mid-sentence, which costs recall."
+        },
+        {
+          "score": 50,
+          "strategy": "Sentence-aware",
+          "tradeoff": "Never splits a sentence. Chunk sizes vary, so cost is less predictable."
+        }
+      ]
+    },
+    "tool_slug": "chunking-strategy",
+    "warnings": []
+  },
+  "cloud-cost": {
+    "artifacts": [],
+    "metrics": {
+      "annual_total": "9354.000000",
+      "dominant_driver": "Compute",
+      "egress_cost": "18.000000",
+      "egress_rate_per_gb": "0.09",
+      "monthly_total": "779.500000"
+    },
+    "series": {
+      "composition": [
+        {
+          "cost": "500.00",
+          "line": "Compute"
+        },
+        {
+          "cost": "200.00",
+          "line": "Database"
+        },
+        {
+          "cost": "50.00",
+          "line": "Cache"
+        },
+        {
+          "cost": "11.50",
+          "line": "Storage"
+        },
+        {
+          "cost": "18.00",
+          "line": "Egress"
+        }
+      ]
+    },
+    "tables": {
+      "lines": [
+        {
+          "line": "Compute",
+          "monthly": "$500.00",
+          "share": "64.1%"
+        },
+        {
+          "line": "Database",
+          "monthly": "$200.00",
+          "share": "25.7%"
+        },
+        {
+          "line": "Cache",
+          "monthly": "$50.00",
+          "share": "6.4%"
+        },
+        {
+          "line": "Storage",
+          "monthly": "$11.50",
+          "share": "1.5%"
+        },
+        {
+          "line": "Egress",
+          "monthly": "$18.00",
+          "share": "2.3%"
+        },
+        {
+          "line": "Load balancer",
+          "monthly": "$0.00",
+          "share": "0.0%"
+        }
+      ]
+    },
+    "tool_slug": "cloud-cost",
+    "warnings": []
+  },
+  "docker-compose": {
+    "artifacts": [
+      {
+        "content": "# Generated by Buildtact (buildtact.ai), 22 September 2026\n# This is a starting point, not a security-audited or production-hardened config.\n# Review all credentials, secrets, resource limits, and network settings\n# before deploying.\n#\n# STARTER TEMPLATE - not a production deployment.\n#\n# Review before running:\n#   - secrets are read from .env; nothing here is a credential\n#   - volumes are named and local; point them at real storage\n#   - health checks are conservative; tune to your model's load time\n#   - resource limits are a starting point, not a measurement\n\nservices:\n  vllm:\n    image: vllm/vllm-openai:latest\n    restart: unless-stopped\n    command: --model meta-llama/Llama-3.1-8B --host 0.0.0.0\n    ports:\n    - 8000:8000\n    environment:\n      HUGGING_FACE_HUB_TOKEN: ${HUGGING_FACE_HUB_TOKEN}\n    volumes:\n    - hf-cache:/root/.cache/huggingface\n    healthcheck:\n      test:\n      - CMD\n      - curl\n      - -f\n      - http://localhost:8000/health\n      interval: 30s\n      timeout: 10s\n      retries: 5\n      start_period: 60s\n    deploy:\n      resources:\n        reservations:\n          devices:\n          - driver: nvidia\n            count: all\n            capabilities:\n            - gpu\n  redis:\n    image: redis:7-alpine\n    restart: unless-stopped\n    ports:\n    - 6379:6379\n    volumes:\n    - redis-data:/data\n    healthcheck:\n      test:\n      - CMD\n      - redis-cli\n      - ping\n      interval: 30s\n      timeout: 10s\n      retries: 5\n      start_period: 60s\n  qdrant:\n    image: qdrant/qdrant:latest\n    restart: unless-stopped\n    ports:\n    - 6333:6333\n    volumes:\n    - qdrant-data:/qdrant/storage\n    healthcheck:\n      test:\n      - CMD-SHELL\n      - bash -c ':> /dev/tcp/127.0.0.1/6333'\n      interval: 30s\n      timeout: 10s\n      retries: 5\n      start_period: 60s\nvolumes:\n  hf-cache: null\n  redis-data: null\n  qdrant-data: null\n",
+        "filename": "docker-compose.yml",
+        "format": "yaml",
+        "language": "yaml",
+        "type": "compose"
+      },
+      {
+        "content": "HUGGING_FACE_HUB_TOKEN=hf_change_me\nVLLM_MODEL=meta-llama/Llama-3.1-8B\n",
+        "filename": ".env.example",
+        "format": "text",
+        "language": null,
+        "type": "env"
+      }
+    ],
+    "metrics": {
+      "archetype": "rag-stack",
+      "files": 2,
+      "gpu_passthrough": "yes",
+      "services": 3
+    },
+    "series": {},
+    "tables": {},
+    "tool_slug": "docker-compose",
+    "warnings": [
+      {
+        "field": null,
+        "level": "info",
+        "message": "vLLM + Qdrant + Redis is a starter template. Secrets come from .env, volumes are local, and the health checks assume a model that loads inside 60 seconds. Check that against yours before relying on it."
+      },
+      {
+        "field": null,
+        "level": "info",
+        "message": "GPU reservations need the NVIDIA Container Toolkit on the host. Without it the container starts and silently runs on CPU."
+      }
+    ]
+  },
+  "embedding-cost": {
+    "artifacts": [],
+    "metrics": {
+      "annual_cost": "1.920000",
+      "cost_per_document": "0.000016",
+      "dimensions": 1536,
+      "ingestion_cost": "0.160000",
+      "monthly_cost": "0.160000",
+      "monthly_tokens": 8000000,
+      "total_tokens": 8000000
+    },
+    "series": {},
+    "tables": {
+      "provider_comparison": [
+        {
+          "cost_per_1k_tokens": "0.000020",
+          "dimensions": 1536,
+          "ingestion_cost": "0.16",
+          "model": "Text Embedding 3 Small",
+          "model_id": "text-embedding-3-small",
+          "monthly_cost": "0.16",
+          "provider": "openai",
+          "selected": true
+        },
+        {
+          "cost_per_1k_tokens": "0.000020",
+          "dimensions": 1024,
+          "ingestion_cost": "0.16",
+          "model": "Multilingual E5 Large Instruct",
+          "model_id": "multilingual-e5-large-instruct",
+          "monthly_cost": "0.16",
+          "provider": "together",
+          "selected": false
+        },
+        {
+          "cost_per_1k_tokens": "0.000020",
+          "dimensions": 1024,
+          "ingestion_cost": "0.16",
+          "model": "Voyage 4 Lite",
+          "model_id": "voyage-4-lite",
+          "monthly_cost": "0.16",
+          "provider": "voyage",
+          "selected": false
+        },
+        {
+          "cost_per_1k_tokens": "0.000050",
+          "dimensions": 1024,
+          "ingestion_cost": "0.40",
+          "model": "Jina Embeddings v3",
+          "model_id": "jina-embeddings-v3",
+          "monthly_cost": "0.40",
+          "provider": "jina",
+          "selected": false
+        },
+        {
+          "cost_per_1k_tokens": "0.000060",
+          "dimensions": 1024,
+          "ingestion_cost": "0.48",
+          "model": "Voyage 4",
+          "model_id": "voyage-4",
+          "monthly_cost": "0.48",
+          "provider": "voyage",
+          "selected": false
+        },
+        {
+          "cost_per_1k_tokens": "0.000100",
+          "dimensions": 1024,
+          "ingestion_cost": "0.80",
+          "model": "Mistral Embed",
+          "model_id": "mistral-embed-23-12",
+          "monthly_cost": "0.80",
+          "provider": "mistral",
+          "selected": false
+        },
+        {
+          "cost_per_1k_tokens": "0.000120",
+          "dimensions": 1536,
+          "ingestion_cost": "0.96",
+          "model": "Embed 4",
+          "model_id": "embed-4",
+          "monthly_cost": "0.96",
+          "provider": "cohere",
+          "selected": false
+        },
+        {
+          "cost_per_1k_tokens": "0.000120",
+          "dimensions": 1024,
+          "ingestion_cost": "0.96",
+          "model": "Voyage Context 4",
+          "model_id": "voyage-context-4",
+          "monthly_cost": "0.96",
+          "provider": "voyage",
+          "selected": false
+        },
+        {
+          "cost_per_1k_tokens": "0.000120",
+          "dimensions": 1024,
+          "ingestion_cost": "0.96",
+          "model": "Voyage 4 Large",
+          "model_id": "voyage-4-large",
+          "monthly_cost": "0.96",
+          "provider": "voyage",
+          "selected": false
+        },
+        {
+          "cost_per_1k_tokens": "0.000130",
+          "dimensions": 3072,
+          "ingestion_cost": "1.04",
+          "model": "Text Embedding 3 Large",
+          "model_id": "text-embedding-3-large",
+          "monthly_cost": "1.04",
+          "provider": "openai",
+          "selected": false
+        },
+        {
+          "cost_per_1k_tokens": "0.000150",
+          "dimensions": 3072,
+          "ingestion_cost": "1.20",
+          "model": "Gemini Embedding",
+          "model_id": "gemini-embedding",
+          "monthly_cost": "1.20",
+          "provider": "google",
+          "selected": false
+        },
+        {
+          "cost_per_1k_tokens": "0.000150",
+          "dimensions": 1536,
+          "ingestion_cost": "1.20",
+          "model": "Codestral Embed",
+          "model_id": "codestral-embed-25-05",
+          "monthly_cost": "1.20",
+          "provider": "mistral",
+          "selected": false
+        },
+        {
+          "cost_per_1k_tokens": "0.000180",
+          "dimensions": 1024,
+          "ingestion_cost": "1.44",
+          "model": "Voyage Code 3",
+          "model_id": "voyage-code-3",
+          "monthly_cost": "1.44",
+          "provider": "voyage",
+          "selected": false
+        },
+        {
+          "cost_per_1k_tokens": "0.000200",
+          "dimensions": 3072,
+          "ingestion_cost": "1.60",
+          "model": "Gemini Embedding 2",
+          "model_id": "gemini-embedding-2",
+          "monthly_cost": "1.60",
+          "provider": "google",
+          "selected": false
+        }
+      ]
+    },
+    "tool_slug": "embedding-cost",
+    "warnings": []
+  },
+  "function-schema": {
+    "artifacts": [
+      {
+        "content": "[\n  {\n    \"type\": \"function\",\n    \"function\": {\n      \"name\": \"get_weather\",\n      \"description\": \"Current conditions for a city.\",\n      \"parameters\": {\n        \"type\": \"object\",\n        \"properties\": {\n          \"city\": {\n            \"type\": \"string\",\n            \"description\": \"City name.\"\n          }\n        },\n        \"required\": [\n          \"city\"\n        ],\n        \"additionalProperties\": false\n      },\n      \"strict\": true\n    }\n  }\n]",
+        "filename": "tools.openai.json",
+        "format": "json",
+        "language": "json",
+        "type": "schema"
+      }
+    ],
+    "metrics": {
+      "parameters": 1,
+      "target": "openai",
+      "tools": 1,
+      "valid": "yes"
+    },
+    "series": {},
+    "tables": {
+      "tools": [
+        {
+          "parameters": 1,
+          "required": 1,
+          "tool": "get_weather",
+          "valid": "yes"
+        }
+      ]
+    },
+    "tool_slug": "function-schema",
+    "warnings": []
+  },
+  "gpu-cost": {
+    "artifacts": [],
+    "metrics": {
+      "api_monthly": "18.262500",
+      "break_even_requests_per_day": 98168,
+      "cheaper": "managed API",
+      "effective_hourly": "4.150000",
+      "monthly_hours": 720,
+      "self_host_monthly": "1792.800000"
+    },
+    "series": {
+      "crossover": [
+        {
+          "api": "0.00",
+          "requests_per_day": 0,
+          "self_host": "1792.80"
+        },
+        {
+          "api": "3.03",
+          "requests_per_day": 166,
+          "self_host": "1792.80"
+        },
+        {
+          "api": "6.06",
+          "requests_per_day": 332,
+          "self_host": "1792.80"
+        },
+        {
+          "api": "9.09",
+          "requests_per_day": 498,
+          "self_host": "1792.80"
+        },
+        {
+          "api": "12.13",
+          "requests_per_day": 664,
+          "self_host": "1792.80"
+        },
+        {
+          "api": "15.16",
+          "requests_per_day": 830,
+          "self_host": "1792.80"
+        },
+        {
+          "api": "18.19",
+          "requests_per_day": 996,
+          "self_host": "1792.80"
+        },
+        {
+          "api": "21.22",
+          "requests_per_day": 1162,
+          "self_host": "1792.80"
+        },
+        {
+          "api": "24.25",
+          "requests_per_day": 1328,
+          "self_host": "1792.80"
+        },
+        {
+          "api": "27.28",
+          "requests_per_day": 1494,
+          "self_host": "1792.80"
+        },
+        {
+          "api": "30.32",
+          "requests_per_day": 1660,
+          "self_host": "1792.80"
+        },
+        {
+          "api": "33.35",
+          "requests_per_day": 1826,
+          "self_host": "1792.80"
+        },
+        {
+          "api": "36.38",
+          "requests_per_day": 1992,
+          "self_host": "1792.80"
+        }
+      ]
+    },
+    "tables": {
+      "comparison": [
+        {
+          "monthly": "$1,792.80",
+          "note": "720 h at $2.49/h",
+          "option": "Self-host (gpu_1x_h100_pcie)"
+        },
+        {
+          "monthly": "$18.26",
+          "note": "1,000 req/day at $0.00 each",
+          "option": "Managed API (GPT-4o Mini)"
+        }
+      ]
+    },
+    "tool_slug": "gpu-cost",
+    "warnings": [
+      {
+        "field": null,
+        "level": "info",
+        "message": "Break-even is 98,168 requests a day against your stated 1,000. At this volume the managed API is not close to being the expensive option."
+      }
+    ]
+  },
+  "hours-saved": {
+    "artifacts": [],
+    "metrics": {
+      "annual_hours": "2739.38",
+      "annual_value": "260240.63",
+      "fte_equivalent": "1.31",
+      "monthly_hours": "228.28",
+      "monthly_value": "21686.72",
+      "rework_value_monthly": "0.00",
+      "total_monthly_value": "21686.72"
+    },
+    "series": {},
+    "tables": {
+      "breakdown": [
+        {
+          "hours_per_month": "228.28",
+          "line": "Time reclaimed",
+          "value": "$21,686.72"
+        },
+        {
+          "hours_per_month": "0.00",
+          "line": "Rework avoided",
+          "value": "$0.00"
+        },
+        {
+          "hours_per_month": "228.28",
+          "line": "Total",
+          "value": "$21,686.72"
+        }
+      ]
+    },
+    "tool_slug": "hours-saved",
+    "warnings": []
+  },
+  "implementation-cost": {
+    "artifacts": [],
+    "metrics": {
+      "contingency": "10110.00",
+      "duration_months": 3,
+      "labour_cost": "62400.00",
+      "monthly_burn": "25836.67",
+      "ongoing_monthly": "0.00",
+      "total_cost": "77510.00"
+    },
+    "series": {
+      "burn": [
+        {
+          "cumulative": "25836.67",
+          "month": 1,
+          "spend": "25836.67"
+        },
+        {
+          "cumulative": "51673.33",
+          "month": 2,
+          "spend": "25836.67"
+        },
+        {
+          "cumulative": "77510.00",
+          "month": 3,
+          "spend": "25836.67"
+        }
+      ]
+    },
+    "tables": {
+      "phases": [
+        {
+          "cost": "$62,400.00",
+          "phase": "Labour"
+        },
+        {
+          "cost": "$5,000.00",
+          "phase": "Infrastructure setup"
+        },
+        {
+          "cost": "$0.00",
+          "phase": "Licences"
+        },
+        {
+          "cost": "$0.00",
+          "phase": "Training"
+        },
+        {
+          "cost": "$67,400.00",
+          "phase": "Subtotal"
+        },
+        {
+          "cost": "$10,110.00",
+          "phase": "Contingency (15.0%)"
+        },
+        {
+          "cost": "$77,510.00",
+          "phase": "Total"
+        }
+      ],
+      "roles": [
+        {
+          "cost": "$38,400.00",
+          "hourly_rate": "$120.00",
+          "hours": 320,
+          "role": "Backend engineer"
+        },
+        {
+          "cost": "$24,000.00",
+          "hourly_rate": "$150.00",
+          "hours": 160,
+          "role": "ML engineer"
+        }
+      ]
+    },
+    "tool_slug": "implementation-cost",
+    "warnings": []
+  },
+  "k8s-estimate": {
+    "artifacts": [
+      {
+        "content": "# Generated by Buildtact (buildtact.ai), 22 September 2026\n# This is a starting point, not a security-audited or production-hardened config.\n# Review all credentials, secrets, resource limits, and network settings\n# before deploying.\n#\n# STARTER TEMPLATE - not a production deployment.\n#\n# Review before running:\n#   - secrets are read from .env; nothing here is a credential\n#   - volumes are named and local; point them at real storage\n#   - health checks are conservative; tune to your model's load time\n#   - resource limits are a starting point, not a measurement\n\napiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: golden\n  labels: &id001\n    app: golden\nspec:\n  replicas: 3\n  selector:\n    matchLabels: *id001\n  template:\n    metadata:\n      labels: *id001\n    spec:\n      containers:\n      - name: golden\n        image: vllm/vllm-openai:latest\n        ports:\n        - containerPort: 8000\n          name: http\n        resources:\n          requests:\n            cpu: '2'\n            memory: 16Gi\n            nvidia.com/gpu: 1\n          limits:\n            cpu: '8'\n            memory: 24Gi\n            nvidia.com/gpu: 1\n        readinessProbe:\n          httpGet:\n            path: /health\n            port: http\n          initialDelaySeconds: 60\n          periodSeconds: 10\n          failureThreshold: 30\n        livenessProbe:\n          httpGet:\n            path: /health\n            port: http\n          initialDelaySeconds: 300\n          periodSeconds: 30\n",
+        "filename": "deployment.yaml",
+        "format": "yaml",
+        "language": "yaml",
+        "type": "k8s-deployment"
+      },
+      {
+        "content": "# Generated by Buildtact (buildtact.ai), 22 September 2026\n# This is a starting point, not a security-audited or production-hardened config.\n# Review all credentials, secrets, resource limits, and network settings\n# before deploying.\n#\n# STARTER TEMPLATE - not a production deployment.\n#\n# Review before running:\n#   - secrets are read from .env; nothing here is a credential\n#   - volumes are named and local; point them at real storage\n#   - health checks are conservative; tune to your model's load time\n#   - resource limits are a starting point, not a measurement\n\napiVersion: v1\nkind: Service\nmetadata:\n  name: golden\n  labels: &id001\n    app: golden\nspec:\n  selector: *id001\n  ports:\n  - port: 80\n    targetPort: http\n    name: http\n  type: ClusterIP\n",
+        "filename": "service.yaml",
+        "format": "yaml",
+        "language": "yaml",
+        "type": "k8s-service"
+      },
+      {
+        "content": "# Generated by Buildtact (buildtact.ai), 22 September 2026\n# This is a starting point, not a security-audited or production-hardened config.\n# Review all credentials, secrets, resource limits, and network settings\n# before deploying.\n#\n# STARTER TEMPLATE - not a production deployment.\n#\n# Review before running:\n#   - secrets are read from .env; nothing here is a credential\n#   - volumes are named and local; point them at real storage\n#   - health checks are conservative; tune to your model's load time\n#   - resource limits are a starting point, not a measurement\n\napiVersion: autoscaling/v2\nkind: HorizontalPodAutoscaler\nmetadata:\n  name: golden\nspec:\n  scaleTargetRef:\n    apiVersion: apps/v1\n    kind: Deployment\n    name: golden\n  minReplicas: 3\n  maxReplicas: 8\n  metrics:\n  - type: Resource\n    resource:\n      name: cpu\n      target:\n        type: Utilization\n        averageUtilization: 70\n",
+        "filename": "hpa.yaml",
+        "format": "yaml",
+        "language": "yaml",
+        "type": "k8s-hpa"
+      },
+      {
+        "content": "# Generated by Buildtact (buildtact.ai), 22 September 2026\n# This is a starting point, not a security-audited or production-hardened config.\n# Review all credentials, secrets, resource limits, and network settings\n# before deploying.\n#\n# STARTER TEMPLATE - not a production deployment.\n#\n# Review before running:\n#   - secrets are read from .env; nothing here is a credential\n#   - volumes are named and local; point them at real storage\n#   - health checks are conservative; tune to your model's load time\n#   - resource limits are a starting point, not a measurement\n\napiVersion: policy/v1\nkind: PodDisruptionBudget\nmetadata:\n  name: golden\nspec:\n  maxUnavailable: 1\n  selector:\n    matchLabels:\n      app: golden\n",
+        "filename": "pdb.yaml",
+        "format": "yaml",
+        "language": "yaml",
+        "type": "k8s-pdb"
+      }
+    ],
+    "metrics": {
+      "cpu_request": "2",
+      "gpus_total": 3,
+      "manifests": 4,
+      "memory_limit_gi": 24,
+      "memory_request_gi": 16,
+      "replicas": 3,
+      "rps_per_replica": "16.67"
+    },
+    "series": {},
+    "tables": {
+      "resources": [
+        {
+          "limit": "8",
+          "request": "2",
+          "resource": "CPU"
+        },
+        {
+          "limit": "24Gi",
+          "request": "16Gi",
+          "resource": "Memory"
+        },
+        {
+          "limit": "1",
+          "request": "1",
+          "resource": "GPU"
+        }
+      ]
+    },
+    "tool_slug": "k8s-estimate",
+    "warnings": [
+      {
+        "field": null,
+        "level": "info",
+        "message": "Starter manifests. Requests and limits are derived from the VRAM estimate and a standard headroom factor, not from a measurement of your workload. Load test before trusting them."
+      },
+      {
+        "field": null,
+        "level": "warning",
+        "message": "The HPA scales on CPU because GPU utilisation is not a core metric. On a GPU deployment CPU stays flat while the accelerator saturates, so this will not scale when you need it to. Use KEDA on queue depth, or the DCGM exporter with custom metrics."
+      }
+    ]
+  },
+  "llm-pricing": {
+    "artifacts": [
+      {
+        "content": "# Cost estimate: GPT-4o Mini\n\n- **Per request:** $0.000525\n- **Daily:** $0.52\n- **Monthly:** $15.98\n- **Annual:** $191.76\n\nPricing verified 2026-09-22 (OpenAI API pricing).\n\n## Cheaper models that fit the same context\n\n| Model | Provider | Monthly | vs selected |\n| --- | --- | ---: | ---: |\n| Ministral 3 3B | mistral | $7.61 | -$8.37 |\n| GPT-5 Nano | openai | $7.76 | -$8.22 |\n| Gemini 2.5 Flash-Lite | google | $9.44 | -$6.54 |\n| GPT-4.1 Nano | openai | $9.89 | -$6.09 |\n| Ministral 3 8B | mistral | $11.41 | -$4.57 |\n| Ministral 3 14B | mistral | $15.22 | -$0.76 |\n| Mistral Small 4 | mistral | $18.26 | $2.28 |\n| GPT-5.6 Luna | openai | $24.96 | $8.98 |\n| GPT-5.4 Nano | openai | $25.72 | $9.74 |\n| Gemini 3.1 Flash-Lite | google | $31.20 | $15.22 |\n",
+        "filename": "cost-estimate-gpt-4o-mini.md",
+        "format": "markdown",
+        "language": null,
+        "type": "cost-report"
+      }
+    ],
+    "metrics": {
+      "annual_cost": "191.756256",
+      "cost_per_request": "0.000525",
+      "daily_cost": "0.525000",
+      "model": "GPT-4o Mini",
+      "monthly_cost": "15.979688",
+      "requests_per_month": 30437,
+      "tokens_per_month": 76093750
+    },
+    "series": {
+      "cost_projection": [
+        {
+          "cost": "15.98",
+          "month": 1
+        },
+        {
+          "cost": "15.98",
+          "month": 2
+        },
+        {
+          "cost": "15.98",
+          "month": 3
+        },
+        {
+          "cost": "15.98",
+          "month": 4
+        },
+        {
+          "cost": "15.98",
+          "month": 5
+        },
+        {
+          "cost": "15.98",
+          "month": 6
+        },
+        {
+          "cost": "15.98",
+          "month": 7
+        },
+        {
+          "cost": "15.98",
+          "month": 8
+        },
+        {
+          "cost": "15.98",
+          "month": 9
+        },
+        {
+          "cost": "15.98",
+          "month": 10
+        },
+        {
+          "cost": "15.98",
+          "month": 11
+        },
+        {
+          "cost": "15.98",
+          "month": 12
+        }
+      ]
+    },
+    "tables": {
+      "model_alternatives": [
+        {
+          "context_window": 128000,
+          "delta_vs_selected": "-8.37",
+          "model": "Ministral 3 3B",
+          "model_id": "ministral-3-3b-25-12",
+          "monthly_cost": "7.61",
+          "pct_of_selected": "47.62",
+          "provider": "mistral"
+        },
+        {
+          "context_window": 272000,
+          "delta_vs_selected": "-8.22",
+          "model": "GPT-5 Nano",
+          "model_id": "gpt-5-nano",
+          "monthly_cost": "7.76",
+          "pct_of_selected": "48.57",
+          "provider": "openai"
+        },
+        {
+          "context_window": 1048576,
+          "delta_vs_selected": "-6.54",
+          "model": "Gemini 2.5 Flash-Lite",
+          "model_id": "gemini-2.5-flash-lite",
+          "monthly_cost": "9.44",
+          "pct_of_selected": "59.05",
+          "provider": "google"
+        },
+        {
+          "context_window": 1047576,
+          "delta_vs_selected": "-6.09",
+          "model": "GPT-4.1 Nano",
+          "model_id": "gpt-4.1-nano",
+          "monthly_cost": "9.89",
+          "pct_of_selected": "61.90",
+          "provider": "openai"
+        },
+        {
+          "context_window": 128000,
+          "delta_vs_selected": "-4.57",
+          "model": "Ministral 3 8B",
+          "model_id": "ministral-3-8b-25-12",
+          "monthly_cost": "11.41",
+          "pct_of_selected": "71.43",
+          "provider": "mistral"
+        },
+        {
+          "context_window": 128000,
+          "delta_vs_selected": "-0.76",
+          "model": "Ministral 3 14B",
+          "model_id": "ministral-3-14b-25-12",
+          "monthly_cost": "15.22",
+          "pct_of_selected": "95.24",
+          "provider": "mistral"
+        },
+        {
+          "context_window": 128000,
+          "delta_vs_selected": "2.28",
+          "model": "Mistral Small 4",
+          "model_id": "mistral-small-4-0-26-03",
+          "monthly_cost": "18.26",
+          "pct_of_selected": "114.29",
+          "provider": "mistral"
+        },
+        {
+          "context_window": 272000,
+          "delta_vs_selected": "8.98",
+          "model": "GPT-5.6 Luna",
+          "model_id": "gpt-5.6-luna",
+          "monthly_cost": "24.96",
+          "pct_of_selected": "156.19",
+          "provider": "openai"
+        },
+        {
+          "context_window": 272000,
+          "delta_vs_selected": "9.74",
+          "model": "GPT-5.4 Nano",
+          "model_id": "gpt-5.4-nano",
+          "monthly_cost": "25.72",
+          "pct_of_selected": "160.95",
+          "provider": "openai"
+        },
+        {
+          "context_window": 1000000,
+          "delta_vs_selected": "15.22",
+          "model": "Gemini 3.1 Flash-Lite",
+          "model_id": "gemini-3.1-flash-lite",
+          "monthly_cost": "31.20",
+          "pct_of_selected": "195.24",
+          "provider": "google"
+        },
+        {
+          "context_window": 256000,
+          "delta_vs_selected": "15.98",
+          "model": "Codestral",
+          "model_id": "codestral-25-08",
+          "monthly_cost": "31.96",
+          "pct_of_selected": "200.00",
+          "provider": "mistral"
+        },
+        {
+          "context_window": 272000,
+          "delta_vs_selected": "22.83",
+          "model": "GPT-5 Mini",
+          "model_id": "gpt-5-mini",
+          "monthly_cost": "38.81",
+          "pct_of_selected": "242.86",
+          "provider": "openai"
+        },
+        {
+          "context_window": 1047576,
+          "delta_vs_selected": "23.59",
+          "model": "GPT-4.1 Mini",
+          "model_id": "gpt-4.1-mini",
+          "monthly_cost": "39.57",
+          "pct_of_selected": "247.62",
+          "provider": "openai"
+        },
+        {
+          "context_window": 1000000,
+          "delta_vs_selected": "32.11",
+          "model": "Gemini 3.5 Flash-Lite",
+          "model_id": "gemini-3.5-flash-lite",
+          "monthly_cost": "48.09",
+          "pct_of_selected": "300.95",
+          "provider": "google"
+        },
+        {
+          "context_window": 1048576,
+          "delta_vs_selected": "32.11",
+          "model": "Gemini 2.5 Flash",
+          "model_id": "gemini-2.5-flash",
+          "monthly_cost": "48.09",
+          "pct_of_selected": "300.95",
+          "provider": "google"
+        },
+        {
+          "context_window": 1000000,
+          "delta_vs_selected": "34.91",
+          "model": "DeepSeek V4 Pro",
+          "model_id": "deepseek-v4-pro",
+          "monthly_cost": "50.89",
+          "pct_of_selected": "318.48",
+          "provider": "deepseek"
+        },
+        {
+          "context_window": 128000,
+          "delta_vs_selected": "37.29",
+          "model": "Mistral Large 3",
+          "model_id": "mistral-large-3-25-12",
+          "monthly_cost": "53.27",
+          "pct_of_selected": "333.33",
+          "provider": "mistral"
+        },
+        {
+          "context_window": 1000000,
+          "delta_vs_selected": "40.33",
+          "model": "Nova 2 Lite",
+          "model_id": "nova-2-lite",
+          "monthly_cost": "56.31",
+          "pct_of_selected": "352.38",
+          "provider": "amazon"
+        },
+        {
+          "context_window": 256000,
+          "delta_vs_selected": "50.98",
+          "model": "Grok Build 0.1",
+          "model_id": "grok-build-0.1",
+          "monthly_cost": "66.96",
+          "pct_of_selected": "419.05",
+          "provider": "xai"
+        },
+        {
+          "context_window": 128000,
+          "delta_vs_selected": "63.16",
+          "model": "Llama 3.3 70B",
+          "model_id": "llama-3.3-70b",
+          "monthly_cost": "79.14",
+          "pct_of_selected": "495.24",
+          "provider": "meta"
+        },
+        {
+          "context_window": 1000000,
+          "delta_vs_selected": "66.20",
+          "model": "Gemini 3.6 Flash",
+          "model_id": "gemini-3.6-flash",
+          "monthly_cost": "82.18",
+          "pct_of_selected": "514.29",
+          "provider": "google"
+        },
+        {
+          "context_window": 1000000,
+          "delta_vs_selected": "66.20",
+          "model": "Grok 4.3",
+          "model_id": "grok-4.3",
+          "monthly_cost": "82.18",
+          "pct_of_selected": "514.29",
+          "provider": "xai"
+        },
+        {
+          "context_window": 272000,
+          "delta_vs_selected": "77.62",
+          "model": "GPT-5.4 Mini",
+          "model_id": "gpt-5.4-mini",
+          "monthly_cost": "93.60",
+          "pct_of_selected": "585.71",
+          "provider": "openai"
+        },
+        {
+          "context_window": 200000,
+          "delta_vs_selected": "92.83",
+          "model": "o4 Mini",
+          "model_id": "o4-mini",
+          "monthly_cost": "108.81",
+          "pct_of_selected": "680.95",
+          "provider": "openai"
+        },
+        {
+          "context_window": 200000,
+          "delta_vs_selected": "93.60",
+          "model": "Claude Haiku 4.5",
+          "model_id": "claude-haiku-4-5",
+          "monthly_cost": "109.58",
+          "pct_of_selected": "685.71",
+          "provider": "anthropic"
+        },
+        {
+          "context_window": 500000,
+          "delta_vs_selected": "145.34",
+          "model": "Grok 4.5",
+          "model_id": "grok-4.5",
+          "monthly_cost": "161.32",
+          "pct_of_selected": "1009.52",
+          "provider": "xai"
+        },
+        {
+          "context_window": 1000000,
+          "delta_vs_selected": "171.21",
+          "model": "Gemini 3.5 Flash",
+          "model_id": "gemini-3.5-flash",
+          "monthly_cost": "187.19",
+          "pct_of_selected": "1171.43",
+          "provider": "google"
+        },
+        {
+          "context_window": 1048576,
+          "delta_vs_selected": "178.06",
+          "model": "Gemini 2.5 Pro",
+          "model_id": "gemini-2.5-pro",
+          "monthly_cost": "194.04",
+          "pct_of_selected": "1214.29",
+          "provider": "google"
+        },
+        {
+          "context_window": 272000,
+          "delta_vs_selected": "178.06",
+          "model": "GPT-5",
+          "model_id": "gpt-5",
+          "monthly_cost": "194.04",
+          "pct_of_selected": "1214.29",
+          "provider": "openai"
+        },
+        {
+          "context_window": 272000,
+          "delta_vs_selected": "178.06",
+          "model": "GPT-5.1",
+          "model_id": "gpt-5.1",
+          "monthly_cost": "194.04",
+          "pct_of_selected": "1214.29",
+          "provider": "openai"
+        },
+        {
+          "context_window": 1047576,
+          "delta_vs_selected": "181.86",
+          "model": "GPT-4.1",
+          "model_id": "gpt-4.1",
+          "monthly_cost": "197.84",
+          "pct_of_selected": "1238.10",
+          "provider": "openai"
+        },
+        {
+          "context_window": 200000,
+          "delta_vs_selected": "181.86",
+          "model": "o3",
+          "model_id": "o3",
+          "monthly_cost": "197.84",
+          "pct_of_selected": "1238.10",
+          "provider": "openai"
+        },
+        {
+          "context_window": 128000,
+          "delta_vs_selected": "189.47",
+          "model": "Mistral Medium 3.5",
+          "model_id": "mistral-medium-3-5-26-04",
+          "monthly_cost": "205.45",
+          "pct_of_selected": "1285.71",
+          "provider": "mistral"
+        },
+        {
+          "context_window": 1000000,
+          "delta_vs_selected": "203.17",
+          "model": "Claude Sonnet 5",
+          "model_id": "claude-sonnet-5",
+          "monthly_cost": "219.15",
+          "pct_of_selected": "1371.43",
+          "provider": "anthropic"
+        },
+        {
+          "context_window": 200000,
+          "delta_vs_selected": "233.61",
+          "model": "Gemini 3.1 Pro",
+          "model_id": "gemini-3.1-pro",
+          "monthly_cost": "249.59",
+          "pct_of_selected": "1561.90",
+          "provider": "google"
+        },
+        {
+          "context_window": 272000,
+          "delta_vs_selected": "233.61",
+          "model": "GPT-5.6 Terra",
+          "model_id": "gpt-5.6-terra",
+          "monthly_cost": "249.59",
+          "pct_of_selected": "1561.90",
+          "provider": "openai"
+        },
+        {
+          "context_window": 128000,
+          "delta_vs_selected": "250.35",
+          "model": "GPT-4o",
+          "model_id": "gpt-4o",
+          "monthly_cost": "266.33",
+          "pct_of_selected": "1666.67",
+          "provider": "openai"
+        },
+        {
+          "context_window": 272000,
+          "delta_vs_selected": "255.68",
+          "model": "GPT-5.2",
+          "model_id": "gpt-5.2",
+          "monthly_cost": "271.65",
+          "pct_of_selected": "1700.00",
+          "provider": "openai"
+        },
+        {
+          "context_window": 272000,
+          "delta_vs_selected": "296.00",
+          "model": "GPT-5.4",
+          "model_id": "gpt-5.4",
+          "monthly_cost": "311.98",
+          "pct_of_selected": "1952.38",
+          "provider": "openai"
+        },
+        {
+          "context_window": 1000000,
+          "delta_vs_selected": "312.75",
+          "model": "Claude Sonnet 4.6",
+          "model_id": "claude-sonnet-4-6",
+          "monthly_cost": "328.73",
+          "pct_of_selected": "2057.14",
+          "provider": "anthropic"
+        },
+        {
+          "context_window": 272000,
+          "delta_vs_selected": "422.32",
+          "model": "GPT-5.6 Sol",
+          "model_id": "gpt-5.6-sol",
+          "monthly_cost": "438.30",
+          "pct_of_selected": "2742.86",
+          "provider": "openai"
+        },
+        {
+          "context_window": 1000000,
+          "delta_vs_selected": "531.90",
+          "model": "Claude Opus 5",
+          "model_id": "claude-opus-5",
+          "monthly_cost": "547.88",
+          "pct_of_selected": "3428.57",
+          "provider": "anthropic"
+        },
+        {
+          "context_window": 1000000,
+          "delta_vs_selected": "531.90",
+          "model": "Claude Opus 4.8",
+          "model_id": "claude-opus-4-8",
+          "monthly_cost": "547.88",
+          "pct_of_selected": "3428.57",
+          "provider": "anthropic"
+        },
+        {
+          "context_window": 1000000,
+          "delta_vs_selected": "531.90",
+          "model": "Claude Opus 4.7",
+          "model_id": "claude-opus-4-7",
+          "monthly_cost": "547.88",
+          "pct_of_selected": "3428.57",
+          "provider": "anthropic"
+        },
+        {
+          "context_window": 272000,
+          "delta_vs_selected": "607.99",
+          "model": "GPT-5.5",
+          "model_id": "gpt-5.5",
+          "monthly_cost": "623.97",
+          "pct_of_selected": "3904.76",
+          "provider": "openai"
+        },
+        {
+          "context_window": 1000000,
+          "delta_vs_selected": "1079.77",
+          "model": "Claude Fable 5",
+          "model_id": "claude-fable-5",
+          "monthly_cost": "1095.75",
+          "pct_of_selected": "6857.14",
+          "provider": "anthropic"
+        },
+        {
+          "context_window": 272000,
+          "delta_vs_selected": "4549.65",
+          "model": "GPT-5.5 Pro",
+          "model_id": "gpt-5.5-pro",
+          "monthly_cost": "4565.63",
+          "pct_of_selected": "28571.43",
+          "provider": "openai"
+        }
+      ]
+    },
+    "tool_slug": "llm-pricing",
+    "warnings": []
+  },
+  "mcp-config": {
+    "artifacts": [
+      {
+        "content": "# Generated by Buildtact (buildtact.ai), 22 September 2026\n# This is a starting point, not a security-audited or production-hardened config.\n# Review all credentials, secrets, resource limits, and network settings\n# before deploying.\n\n\"\"\"\nMCP server: golden-server\n\nA server that exists to be snapshotted.\n\nGenerated by Buildtact. The tool bodies are stubs that echo their\narguments so the server runs and connects before you implement it —\nreplace each one with the real call.\n\nTargets MCP spec 2025-06-18.\n\"\"\"\n\nfrom __future__ import annotations\n\nimport json\nfrom typing import Annotated\n\nfrom mcp.server import MCPServer\nfrom pydantic import Field\n\nserver = MCPServer(\"golden-server\")\n\n\n@server.tool(\n    name=\"search\",\n    description=\"Search the corpus.\",\n)\ndef search(\n    query: Annotated[str, Field(description=\"What to look for.\")],\n) -> str:\n    # TODO: implement. Until then this echoes its arguments, which is\n    # enough to verify the connection end to end from the client.\n    return json.dumps(\n        {\n            \"tool\": \"search\",\n            \"arguments\": {\"query\": query},\n            \"status\": \"not_implemented\",\n        },\n        default=str,\n    )\n\n\ndef main() -> None:\n    server.run(transport=\"stdio\")\n\n\nif __name__ == \"__main__\":\n    main()\n",
+        "filename": "mcp-server-golden-server/server.py",
+        "format": "code",
+        "language": "python",
+        "type": "mcp-server"
+      },
+      {
+        "content": "[project]\nname = \"mcp-server-golden-server\"\nversion = \"0.1.0\"\ndescription = \"A server that exists to be snapshotted.\"\nrequires-python = \">=3.10\"\ndependencies = [\n    \"mcp>=2,<3\",\n]\n\n[dependency-groups]\ndev = [\n    \"pytest>=8.0\",\n    \"pytest-asyncio>=0.24\",\n]\n\n[project.scripts]\nmcp-server-golden-server = \"server:main\"\n\n[tool.pytest.ini_options]\nasyncio_mode = \"auto\"\n\n[tool.ruff]\nline-length = 88\n",
+        "filename": "mcp-server-golden-server/pyproject.toml",
+        "format": "text",
+        "language": "toml",
+        "type": "mcp-pyproject"
+      },
+      {
+        "content": "# golden-server\n\nA server that exists to be snapshotted.\n\nTargets MCP specification **2025-06-18**, built on `mcp>=2,<3`.\n\n## Install and run\n\n```bash\ncd mcp-server-golden-server\nuv sync\nuv run server.py\n```\n\nTransport: `stdio`: the client starts this process and talks to it over pipes. This is what Claude Desktop uses.\n\n## Connect it to Claude Desktop\n\n1. Open `claude_desktop_config.json` in this bundle and replace\n   `/absolute/path/to/mcp-server-golden-server` with the real path. Claude Desktop launches the\n   server from an unspecified working directory, so a relative path will not work.\n2. Merge that block into your own config:\n   - macOS: `~/Library/Application Support/Claude/claude_desktop_config.json`\n   - Windows: `%APPDATA%\\Claude\\claude_desktop_config.json`\n3. Restart Claude Desktop. The tools appear under the connectors icon.\n\nIf they do not appear, run `uv run server.py` in a terminal first — a server that\nfails to start shows up as an absent connector, not as an error.\n\n## Tools\n\n| Tool | Parameters | Description |\n| --- | --- | --- |\n| `search` | query | Search the corpus. |\n\n\n## Authentication\n\nThis server takes no credentials. If the service it calls needs one, add it to `.env.example` and read it with `os.environ`.\n\n## Tests\n\n```bash\nuv run pytest\n```\n\nThe generated tests assert that every tool is registered, described, and\ncallable. They pass against the stubs — they are a wiring check, and they stay\nuseful once you replace the bodies.\n\n## What is not done\n\nEvery tool body is a stub that echoes its arguments and reports\n`\"status\": \"not_implemented\"`. That is deliberate: the bundle runs and connects\nbefore you have written anything, so the plumbing is verified separately from\nthe logic. Replace each body with the real call.\n",
+        "filename": "mcp-server-golden-server/README.md",
+        "format": "markdown",
+        "language": null,
+        "type": "mcp-readme"
+      },
+      {
+        "content": "# Generated by Buildtact (buildtact.ai), 22 September 2026\n# This is a starting point, not a security-audited or production-hardened config.\n# Review all credentials, secrets, resource limits, and network settings\n# before deploying.\n\n# Copy to .env and fill in. Nothing here is committed.\n",
+        "filename": "mcp-server-golden-server/.env.example",
+        "format": "text",
+        "language": null,
+        "type": "mcp-env"
+      },
+      {
+        "content": "\"\"\"Generated tests. One per tool, plus a registration check.\n\nRun with `uv run pytest` from the bundle directory.\n\"\"\"\n\nfrom __future__ import annotations\n\nfrom server import server\n\nEXPECTED = ['search']\n\n\nasync def test_every_tool_is_registered() -> None:\n    registered = {tool.name for tool in await server.list_tools()}\n    assert registered == set(EXPECTED)\n\n\nasync def test_every_tool_has_a_description() -> None:\n    for tool in await server.list_tools():\n        assert tool.description, f\"{tool.name} has no description\"\n\n\nasync def test_search_is_callable() -> None:\n    result = await server.call_tool(\"search\", {'query': 'example'})\n    assert not result.is_error\n",
+        "filename": "mcp-server-golden-server/tests/test_server.py",
+        "format": "code",
+        "language": "python",
+        "type": "mcp-tests"
+      },
+      {
+        "content": "{\n  \"mcpServers\": {\n    \"golden-server\": {\n      \"command\": \"uv\",\n      \"args\": [\n        \"--directory\",\n        \"/absolute/path/to/mcp-server-golden-server\",\n        \"run\",\n        \"server.py\"\n      ]\n    }\n  }\n}\n",
+        "filename": "mcp-server-golden-server/claude_desktop_config.json",
+        "format": "json",
+        "language": "json",
+        "type": "mcp-client-config"
+      }
+    ],
+    "metrics": {
+      "auth": "none",
+      "files": 6,
+      "server": "golden-server",
+      "server_lines": 54,
+      "spec_version": "2025-06-18",
+      "tools": 1,
+      "transport": "stdio"
+    },
+    "series": {},
+    "tables": {
+      "files": [
+        {
+          "bytes": 1269,
+          "file": "mcp-server-golden-server/server.py"
+        },
+        {
+          "bytes": 398,
+          "file": "mcp-server-golden-server/pyproject.toml"
+        },
+        {
+          "bytes": 1772,
+          "file": "mcp-server-golden-server/README.md"
+        },
+        {
+          "bytes": 290,
+          "file": "mcp-server-golden-server/.env.example"
+        },
+        {
+          "bytes": 676,
+          "file": "mcp-server-golden-server/tests/test_server.py"
+        },
+        {
+          "bytes": 214,
+          "file": "mcp-server-golden-server/claude_desktop_config.json"
+        }
+      ],
+      "tools": [
+        {
+          "declared": "search",
+          "generated": "search",
+          "parameters": 1,
+          "required": 1
+        }
+      ]
+    },
+    "tool_slug": "mcp-config",
+    "warnings": []
+  },
+  "model-roi": {
+    "artifacts": [
+      {
+        "content": "# AI investment business case\n\n## Summary\n\n| Measure | Value |\n| --- | --- |\n| Payback period | 5 months |\n| 12-month ROI | 196.0% |\n| NPV over 36 months | $364,097.23 |\n| Year-one net saving | $148,000.00 |\n\n## Stated assumptions\n\n- Current process cost: **$20,000.00 per month**\n- AI running cost: **$6,000.00 per month**, incurred in full from month 1\n- One-off implementation cost: **$50,000.00**\n- Adoption ramps linearly to full over **3 months**\n- Cash flows discounted at **10.0% annually**, applied monthly\n\nThe saving is scaled by adoption each month; the running cost is not, because\nthe platform is paid for from day one whether or not rollout has finished.\n\n## How to read this\n\nPayback is the month cumulative cash flow first turns positive, counting the\nimplementation cost as month-zero outflow. NPV discounts every monthly flow\nback to today, so it is lower than the undiscounted total by design.\n",
+        "filename": "business-case.md",
+        "format": "markdown",
+        "language": null,
+        "type": "business-case"
+      }
+    ],
+    "metrics": {
+      "discount_rate_pct": "10.0",
+      "implementation_cost": "50000.00",
+      "monthly_saving_at_full_adoption": "14000.00",
+      "npv": "364097.23",
+      "payback_months": 5,
+      "roi_12m_pct": "196.0",
+      "year_one_net": "148000.00"
+    },
+    "series": {
+      "cash_flow": [
+        {
+          "adoption_pct": "33.3",
+          "cumulative": "-49333.33",
+          "month": 1,
+          "net_saving": "666.67"
+        },
+        {
+          "adoption_pct": "66.7",
+          "cumulative": "-42000.00",
+          "month": 2,
+          "net_saving": "7333.33"
+        },
+        {
+          "adoption_pct": "100.0",
+          "cumulative": "-28000.00",
+          "month": 3,
+          "net_saving": "14000.00"
+        },
+        {
+          "adoption_pct": "100.0",
+          "cumulative": "-14000.00",
+          "month": 4,
+          "net_saving": "14000.00"
+        },
+        {
+          "adoption_pct": "100.0",
+          "cumulative": "0.00",
+          "month": 5,
+          "net_saving": "14000.00"
+        },
+        {
+          "adoption_pct": "100.0",
+          "cumulative": "14000.00",
+          "month": 6,
+          "net_saving": "14000.00"
+        },
+        {
+          "adoption_pct": "100.0",
+          "cumulative": "28000.00",
+          "month": 7,
+          "net_saving": "14000.00"
+        },
+        {
+          "adoption_pct": "100.0",
+          "cumulative": "42000.00",
+          "month": 8,
+          "net_saving": "14000.00"
+        },
+        {
+          "adoption_pct": "100.0",
+          "cumulative": "56000.00",
+          "month": 9,
+          "net_saving": "14000.00"
+        },
+        {
+          "adoption_pct": "100.0",
+          "cumulative": "70000.00",
+          "month": 10,
+          "net_saving": "14000.00"
+        },
+        {
+          "adoption_pct": "100.0",
+          "cumulative": "84000.00",
+          "month": 11,
+          "net_saving": "14000.00"
+        },
+        {
+          "adoption_pct": "100.0",
+          "cumulative": "98000.00",
+          "month": 12,
+          "net_saving": "14000.00"
+        },
+        {
+          "adoption_pct": "100.0",
+          "cumulative": "112000.00",
+          "month": 13,
+          "net_saving": "14000.00"
+        },
+        {
+          "adoption_pct": "100.0",
+          "cumulative": "126000.00",
+          "month": 14,
+          "net_saving": "14000.00"
+        },
+        {
+          "adoption_pct": "100.0",
+          "cumulative": "140000.00",
+          "month": 15,
+          "net_saving": "14000.00"
+        },
+        {
+          "adoption_pct": "100.0",
+          "cumulative": "154000.00",
+          "month": 16,
+          "net_saving": "14000.00"
+        },
+        {
+          "adoption_pct": "100.0",
+          "cumulative": "168000.00",
+          "month": 17,
+          "net_saving": "14000.00"
+        },
+        {
+          "adoption_pct": "100.0",
+          "cumulative": "182000.00",
+          "month": 18,
+          "net_saving": "14000.00"
+        },
+        {
+          "adoption_pct": "100.0",
+          "cumulative": "196000.00",
+          "month": 19,
+          "net_saving": "14000.00"
+        },
+        {
+          "adoption_pct": "100.0",
+          "cumulative": "210000.00",
+          "month": 20,
+          "net_saving": "14000.00"
+        },
+        {
+          "adoption_pct": "100.0",
+          "cumulative": "224000.00",
+          "month": 21,
+          "net_saving": "14000.00"
+        },
+        {
+          "adoption_pct": "100.0",
+          "cumulative": "238000.00",
+          "month": 22,
+          "net_saving": "14000.00"
+        },
+        {
+          "adoption_pct": "100.0",
+          "cumulative": "252000.00",
+          "month": 23,
+          "net_saving": "14000.00"
+        },
+        {
+          "adoption_pct": "100.0",
+          "cumulative": "266000.00",
+          "month": 24,
+          "net_saving": "14000.00"
+        },
+        {
+          "adoption_pct": "100.0",
+          "cumulative": "280000.00",
+          "month": 25,
+          "net_saving": "14000.00"
+        },
+        {
+          "adoption_pct": "100.0",
+          "cumulative": "294000.00",
+          "month": 26,
+          "net_saving": "14000.00"
+        },
+        {
+          "adoption_pct": "100.0",
+          "cumulative": "308000.00",
+          "month": 27,
+          "net_saving": "14000.00"
+        },
+        {
+          "adoption_pct": "100.0",
+          "cumulative": "322000.00",
+          "month": 28,
+          "net_saving": "14000.00"
+        },
+        {
+          "adoption_pct": "100.0",
+          "cumulative": "336000.00",
+          "month": 29,
+          "net_saving": "14000.00"
+        },
+        {
+          "adoption_pct": "100.0",
+          "cumulative": "350000.00",
+          "month": 30,
+          "net_saving": "14000.00"
+        },
+        {
+          "adoption_pct": "100.0",
+          "cumulative": "364000.00",
+          "month": 31,
+          "net_saving": "14000.00"
+        },
+        {
+          "adoption_pct": "100.0",
+          "cumulative": "378000.00",
+          "month": 32,
+          "net_saving": "14000.00"
+        },
+        {
+          "adoption_pct": "100.0",
+          "cumulative": "392000.00",
+          "month": 33,
+          "net_saving": "14000.00"
+        },
+        {
+          "adoption_pct": "100.0",
+          "cumulative": "406000.00",
+          "month": 34,
+          "net_saving": "14000.00"
+        },
+        {
+          "adoption_pct": "100.0",
+          "cumulative": "420000.00",
+          "month": 35,
+          "net_saving": "14000.00"
+        },
+        {
+          "adoption_pct": "100.0",
+          "cumulative": "434000.00",
+          "month": 36,
+          "net_saving": "14000.00"
+        }
+      ]
+    },
+    "tables": {
+      "assumptions": [
+        {
+          "assumption": "Current process cost",
+          "value": "$20,000.00/mo"
+        },
+        {
+          "assumption": "AI running cost",
+          "value": "$6,000.00/mo"
+        },
+        {
+          "assumption": "Implementation cost",
+          "value": "$50,000.00"
+        },
+        {
+          "assumption": "Adoption ramp",
+          "value": "3 months to full"
+        },
+        {
+          "assumption": "Horizon",
+          "value": "36 months"
+        },
+        {
+          "assumption": "Discount rate",
+          "value": "10.0% annual"
+        }
+      ]
+    },
+    "tool_slug": "model-roi",
+    "warnings": []
+  },
+  "pdf-tokens": {
+    "artifacts": [],
+    "metrics": {
+      "characters": 0,
+      "estimated_chunks": 1,
+      "filename": "golden.pdf",
+      "ingestion_cost": "0.000000",
+      "pages": 3,
+      "pages_needing_ocr": 3,
+      "tokens": 0
+    },
+    "series": {},
+    "tables": {
+      "pages": [
+        {
+          "characters": 0,
+          "extracted": "no",
+          "page": 1,
+          "tokens": 0
+        },
+        {
+          "characters": 0,
+          "extracted": "no",
+          "page": 2,
+          "tokens": 0
+        },
+        {
+          "characters": 0,
+          "extracted": "no",
+          "page": 3,
+          "tokens": 0
+        }
+      ]
+    },
+    "tool_slug": "pdf-tokens",
+    "warnings": [
+      {
+        "field": null,
+        "level": "info",
+        "message": "The file was read in memory and discarded. Nothing was written to disk and no copy of the document exists on this server."
+      },
+      {
+        "field": null,
+        "level": "info",
+        "message": "Token counts are estimated at 4 characters per token. Real tokenizer counts arrive with the AI service layer."
+      },
+      {
+        "field": null,
+        "level": "warning",
+        "message": "3 page(s) yielded no text (1, 2, 3). These are probably scanned images and need OCR before they can be embedded."
+      }
+    ]
+  },
+  "pipeline-cost": {
+    "artifacts": [],
+    "metrics": {
+      "cost_per_query": "0.005785",
+      "dominant_cost": "Reranking",
+      "ingestion_cost": "0.307200",
+      "monthly_cost": "176.071588",
+      "queries_per_month": 30437,
+      "total_chunks": 30000
+    },
+    "series": {
+      "composition": [
+        {
+          "cost": "0.31",
+          "line": "Re-indexing"
+        },
+        {
+          "cost": "0.02",
+          "line": "Query embedding"
+        },
+        {
+          "cost": "155.84",
+          "line": "Reranking"
+        },
+        {
+          "cost": "19.91",
+          "line": "Generation"
+        }
+      ]
+    },
+    "tables": {
+      "breakdown": [
+        {
+          "line": "Ingestion (one-off)",
+          "monthly": "$0.31",
+          "share": "—"
+        },
+        {
+          "line": "Re-indexing",
+          "monthly": "$0.31",
+          "share": "0.2%"
+        },
+        {
+          "line": "Query embedding",
+          "monthly": "$0.02",
+          "share": "0.0%"
+        },
+        {
+          "line": "Reranking",
+          "monthly": "$155.84",
+          "share": "88.5%"
+        },
+        {
+          "line": "Generation",
+          "monthly": "$19.91",
+          "share": "11.3%"
+        },
+        {
+          "line": "Vector store",
+          "monthly": "$0.00",
+          "share": "0.0%"
+        }
+      ]
+    },
+    "tool_slug": "pipeline-cost",
+    "warnings": [
+      {
+        "field": null,
+        "level": "warning",
+        "message": "Reranking costs more than generation here. Rerank fewer candidates, or check whether the reranker is priced per search rather than per token - the two differ by orders of magnitude at this volume."
+      }
+    ]
+  },
+  "rate-limits": {
+    "artifacts": [],
+    "metrics": {
+      "binding_constraint": "Client concurrency",
+      "headroom_pct": "-60.0",
+      "max_sustainable_rpm": 120,
+      "queue_depth": 180,
+      "recommended_tier": "Tier 3",
+      "tier": "Tier 2"
+    },
+    "series": {},
+    "tables": {
+      "backoff": [
+        {
+          "parameter": "Strategy",
+          "value": "Exponential backoff with full jitter"
+        },
+        {
+          "parameter": "Base delay",
+          "value": "1s"
+        },
+        {
+          "parameter": "Multiplier",
+          "value": "2x"
+        },
+        {
+          "parameter": "Max delay",
+          "value": "60s"
+        },
+        {
+          "parameter": "Jitter",
+          "value": "Full: delay = random(0, computed)"
+        },
+        {
+          "parameter": "Max attempts",
+          "value": "5"
+        },
+        {
+          "parameter": "Honour Retry-After",
+          "value": "Yes: the header overrides the computed delay"
+        },
+        {
+          "parameter": "Note",
+          "value": "Full jitter rather than equal jitter: retries from a burst must be spread, and equal jitter keeps half the delay synchronised."
+        }
+      ],
+      "constraints": [
+        {
+          "constraint": "Requests per minute",
+          "limit": "5,000 req/min",
+          "note": "The ceiling people plan against, and rarely the one that binds.",
+          "required": "300 req/min",
+          "status": "ok",
+          "utilisation": "6.0%"
+        },
+        {
+          "constraint": "Tokens per minute",
+          "limit": "450,000 tok/min",
+          "note": "OpenAI meters input and output against one budget.",
+          "required": "750,000 tok/min",
+          "status": "over",
+          "utilisation": "166.7%"
+        },
+        {
+          "constraint": "Client concurrency",
+          "limit": "120 req/min",
+          "note": "8 in flight at 4s each. Self-imposed, so no tier upgrade moves it.",
+          "required": "300 req/min",
+          "status": "over",
+          "utilisation": "250.0%"
+        }
+      ],
+      "tiers": [
+        {
+          "fits": "no",
+          "qualifier": "No payment method on file. Not all models are available.",
+          "requests_per_min": "3",
+          "tier": "Free",
+          "tokens_per_min": "40,000 combined"
+        },
+        {
+          "fits": "no",
+          "qualifier": "$5 paid",
+          "requests_per_min": "500",
+          "tier": "Tier 1",
+          "tokens_per_min": "30,000 combined"
+        },
+        {
+          "fits": "no",
+          "qualifier": "$50 paid and 7 days since first payment",
+          "requests_per_min": "5,000",
+          "tier": "Tier 2",
+          "tokens_per_min": "450,000 combined"
+        },
+        {
+          "fits": "yes",
+          "qualifier": "$100 paid and 7 days since first payment",
+          "requests_per_min": "5,000",
+          "tier": "Tier 3",
+          "tokens_per_min": "800,000 combined"
+        },
+        {
+          "fits": "yes",
+          "qualifier": "$250 paid and 14 days since first payment",
+          "requests_per_min": "10,000",
+          "tier": "Tier 4",
+          "tokens_per_min": "2,000,000 combined"
+        },
+        {
+          "fits": "yes",
+          "qualifier": "$1,000 paid and 30 days since first payment",
+          "requests_per_min": "10,000",
+          "tier": "Tier 5",
+          "tokens_per_min": "30,000,000 combined"
+        }
+      ]
+    },
+    "tool_slug": "rate-limits",
+    "warnings": [
+      {
+        "field": null,
+        "level": "info",
+        "message": "Limits are OpenAI's published defaults for the GPT-4o / GPT-4.1 class, verified 2026-08-10 against https://platform.openai.com/docs/guides/rate-limits. Per-model and negotiated limits differ, and tiers can change without notice, so your dashboard is authoritative."
+      },
+      {
+        "field": null,
+        "level": "critical",
+        "message": "Client concurrency is exceeded, not merely tight. At this volume requests are rejected from the first minute, so the backoff plan below is damage control rather than a fix."
+      },
+      {
+        "field": null,
+        "level": "warning",
+        "message": "The binding constraint is your own concurrency, not the provider's limits. Raising the tier changes nothing here. Raise in-flight requests, or cut per-request latency."
+      },
+      {
+        "field": null,
+        "level": "warning",
+        "message": "A 1x burst arrives faster than the account can drain it. You need somewhere to hold roughly 180 requests, or they become errors at the edge."
+      },
+      {
+        "field": null,
+        "level": "warning",
+        "message": "This workload needs Tier 3 on OpenAI. Qualifier: $100 paid and 7 days since first payment."
+      }
+    ]
+  },
+  "readiness-checklist": {
+    "artifacts": [],
+    "metrics": {
+      "applicable_items": 16,
+      "completed": 0,
+      "critical_outstanding": 7,
+      "profile": "self-hosted",
+      "score": 0
+    },
+    "series": {},
+    "tables": {
+      "checklist": [
+        {
+          "area": "reliability",
+          "done": "no",
+          "item": "Health checks on every service",
+          "weight": 5,
+          "why": "A container that is up is not a service that works."
+        },
+        {
+          "area": "reliability",
+          "done": "no",
+          "item": "Automated backups, restore tested",
+          "weight": 5,
+          "why": "An untested backup is a hope."
+        },
+        {
+          "area": "reliability",
+          "done": "no",
+          "item": "Retries with backoff on provider calls",
+          "weight": 4,
+          "why": "Providers rate-limit and time out."
+        },
+        {
+          "area": "security",
+          "done": "no",
+          "item": "Secrets in a manager, not env files in git",
+          "weight": 5,
+          "why": "The most common breach in this stack."
+        },
+        {
+          "area": "security",
+          "done": "no",
+          "item": "API keys scoped and rotatable",
+          "weight": 4,
+          "why": "A single unrotatable key is an outage waiting."
+        },
+        {
+          "area": "security",
+          "done": "no",
+          "item": "Prompt-injection handling on user input",
+          "weight": 4,
+          "why": "Any RAG or agent surface is an injection surface."
+        },
+        {
+          "area": "observability",
+          "done": "no",
+          "item": "Request tracing across the whole call path",
+          "weight": 4,
+          "why": "Debugging an agent without traces is guesswork."
+        },
+        {
+          "area": "observability",
+          "done": "no",
+          "item": "Token and cost per request recorded",
+          "weight": 5,
+          "why": "You cannot control a bill you cannot attribute."
+        },
+        {
+          "area": "observability",
+          "done": "no",
+          "item": "Alerting on error rate and latency",
+          "weight": 4,
+          "why": "Not on CPU."
+        },
+        {
+          "area": "scaling",
+          "done": "no",
+          "item": "Load tested at 3x expected peak",
+          "weight": 3,
+          "why": "Peak is not average."
+        },
+        {
+          "area": "cost",
+          "done": "no",
+          "item": "Budget alerts on the provider account",
+          "weight": 5,
+          "why": "The first sign should not be the invoice."
+        },
+        {
+          "area": "cost",
+          "done": "no",
+          "item": "Caching for repeated prompts",
+          "weight": 3,
+          "why": "The cheapest token is the one not sent."
+        },
+        {
+          "area": "reliability",
+          "done": "no",
+          "item": "GPU node failure tested",
+          "weight": 5,
+          "why": "A single-node deployment has a single point of failure."
+        },
+        {
+          "area": "scaling",
+          "done": "no",
+          "item": "Autoscaling on queue depth, not CPU",
+          "weight": 4,
+          "why": "GPU serving is queue-bound, and CPU is flat while it saturates."
+        },
+        {
+          "area": "cost",
+          "done": "no",
+          "item": "Idle GPU shutdown outside peak hours",
+          "weight": 5,
+          "why": "Idle time is most of the bill on a self-hosted deployment."
+        },
+        {
+          "area": "observability",
+          "done": "no",
+          "item": "GPU utilisation and VRAM headroom monitored",
+          "weight": 4,
+          "why": "OOM at 3am is otherwise the first signal."
+        }
+      ]
+    },
+    "tool_slug": "readiness-checklist",
+    "warnings": [
+      {
+        "field": null,
+        "level": "warning",
+        "message": "7 of the highest-weighted items are outstanding, starting with: Health checks on every service"
+      }
+    ]
+  },
+  "token-calculator": {
+    "artifacts": [],
+    "metrics": {
+      "characters": 450,
+      "context_used_pct": "0.08",
+      "context_window": 128000,
+      "cost_per_call": "0.000015",
+      "fits": "yes",
+      "method": "tokenizer",
+      "overflow_tokens": 0,
+      "tokens": 101,
+      "words": 90
+    },
+    "series": {},
+    "tables": {
+      "context_fit": [
+        {
+          "context_used_pct": "0.04",
+          "context_window": 272000,
+          "cost_per_call": "0.000005",
+          "fits": true,
+          "model": "GPT-5 Nano",
+          "model_id": "gpt-5-nano",
+          "provider": "openai"
+        },
+        {
+          "context_used_pct": "0.01",
+          "context_window": 1048576,
+          "cost_per_call": "0.000010",
+          "fits": true,
+          "model": "Gemini 2.5 Flash-Lite",
+          "model_id": "gemini-2.5-flash-lite",
+          "provider": "google"
+        },
+        {
+          "context_used_pct": "0.08",
+          "context_window": 128000,
+          "cost_per_call": "0.000010",
+          "fits": true,
+          "model": "Ministral 3 3B",
+          "model_id": "ministral-3-3b-25-12",
+          "provider": "mistral"
+        },
+        {
+          "context_used_pct": "0.01",
+          "context_window": 1047576,
+          "cost_per_call": "0.000010",
+          "fits": true,
+          "model": "GPT-4.1 Nano",
+          "model_id": "gpt-4.1-nano",
+          "provider": "openai"
+        },
+        {
+          "context_used_pct": "0.08",
+          "context_window": 128000,
+          "cost_per_call": "0.000015",
+          "fits": true,
+          "model": "Mistral Small 4",
+          "model_id": "mistral-small-4-0-26-03",
+          "provider": "mistral"
+        },
+        {
+          "context_used_pct": "0.08",
+          "context_window": 128000,
+          "cost_per_call": "0.000015",
+          "fits": true,
+          "model": "Ministral 3 8B",
+          "model_id": "ministral-3-8b-25-12",
+          "provider": "mistral"
+        },
+        {
+          "context_used_pct": "0.08",
+          "context_window": 128000,
+          "cost_per_call": "0.000015",
+          "fits": true,
+          "model": "GPT-4o Mini",
+          "model_id": "gpt-4o-mini",
+          "provider": "openai"
+        },
+        {
+          "context_used_pct": "0.08",
+          "context_window": 128000,
+          "cost_per_call": "0.000020",
+          "fits": true,
+          "model": "Ministral 3 14B",
+          "model_id": "ministral-3-14b-25-12",
+          "provider": "mistral"
+        },
+        {
+          "context_used_pct": "0.04",
+          "context_window": 272000,
+          "cost_per_call": "0.000020",
+          "fits": true,
+          "model": "GPT-5.4 Nano",
+          "model_id": "gpt-5.4-nano",
+          "provider": "openai"
+        },
+        {
+          "context_used_pct": "0.04",
+          "context_window": 272000,
+          "cost_per_call": "0.000020",
+          "fits": true,
+          "model": "GPT-5.6 Luna",
+          "model_id": "gpt-5.6-luna",
+          "provider": "openai"
+        },
+        {
+          "context_used_pct": "0.01",
+          "context_window": 1000000,
+          "cost_per_call": "0.000025",
+          "fits": true,
+          "model": "Gemini 3.1 Flash-Lite",
+          "model_id": "gemini-3.1-flash-lite",
+          "provider": "google"
+        },
+        {
+          "context_used_pct": "0.04",
+          "context_window": 272000,
+          "cost_per_call": "0.000025",
+          "fits": true,
+          "model": "GPT-5 Mini",
+          "model_id": "gpt-5-mini",
+          "provider": "openai"
+        },
+        {
+          "context_used_pct": "0.01",
+          "context_window": 1000000,
+          "cost_per_call": "0.000030",
+          "fits": true,
+          "model": "Nova 2 Lite",
+          "model_id": "nova-2-lite",
+          "provider": "amazon"
+        },
+        {
+          "context_used_pct": "0.01",
+          "context_window": 1000000,
+          "cost_per_call": "0.000030",
+          "fits": true,
+          "model": "Gemini 3.5 Flash-Lite",
+          "model_id": "gemini-3.5-flash-lite",
+          "provider": "google"
+        },
+        {
+          "context_used_pct": "0.01",
+          "context_window": 1048576,
+          "cost_per_call": "0.000030",
+          "fits": true,
+          "model": "Gemini 2.5 Flash",
+          "model_id": "gemini-2.5-flash",
+          "provider": "google"
+        },
+        {
+          "context_used_pct": "0.04",
+          "context_window": 256000,
+          "cost_per_call": "0.000030",
+          "fits": true,
+          "model": "Codestral",
+          "model_id": "codestral-25-08",
+          "provider": "mistral"
+        },
+        {
+          "context_used_pct": "0.01",
+          "context_window": 1047576,
+          "cost_per_call": "0.000040",
+          "fits": true,
+          "model": "GPT-4.1 Mini",
+          "model_id": "gpt-4.1-mini",
+          "provider": "openai"
+        },
+        {
+          "context_used_pct": "0.08",
+          "context_window": 128000,
+          "cost_per_call": "0.000051",
+          "fits": true,
+          "model": "Mistral Large 3",
+          "model_id": "mistral-large-3-25-12",
+          "provider": "mistral"
+        },
+        {
+          "context_used_pct": "0.01",
+          "context_window": 1000000,
+          "cost_per_call": "0.000067",
+          "fits": true,
+          "model": "DeepSeek V4 Pro",
+          "model_id": "deepseek-v4-pro",
+          "provider": "deepseek"
+        },
+        {
+          "context_used_pct": "0.01",
+          "context_window": 1000000,
+          "cost_per_call": "0.000076",
+          "fits": true,
+          "model": "Gemini 3.6 Flash",
+          "model_id": "gemini-3.6-flash",
+          "provider": "google"
+        },
+        {
+          "context_used_pct": "0.04",
+          "context_window": 272000,
+          "cost_per_call": "0.000076",
+          "fits": true,
+          "model": "GPT-5.4 Mini",
+          "model_id": "gpt-5.4-mini",
+          "provider": "openai"
+        },
+        {
+          "context_used_pct": "0.05",
+          "context_window": 200000,
+          "cost_per_call": "0.000101",
+          "fits": true,
+          "model": "Claude Haiku 4.5",
+          "model_id": "claude-haiku-4-5",
+          "provider": "anthropic"
+        },
+        {
+          "context_used_pct": "0.04",
+          "context_window": 256000,
+          "cost_per_call": "0.000101",
+          "fits": true,
+          "model": "Grok Build 0.1",
+          "model_id": "grok-build-0.1",
+          "provider": "xai"
+        },
+        {
+          "context_used_pct": "0.08",
+          "context_window": 128000,
+          "cost_per_call": "0.000105",
+          "fits": true,
+          "model": "Llama 3.3 70B",
+          "model_id": "llama-3.3-70b",
+          "provider": "meta"
+        },
+        {
+          "context_used_pct": "0.05",
+          "context_window": 200000,
+          "cost_per_call": "0.000111",
+          "fits": true,
+          "model": "o4 Mini",
+          "model_id": "o4-mini",
+          "provider": "openai"
+        },
+        {
+          "context_used_pct": "0.01",
+          "context_window": 1048576,
+          "cost_per_call": "0.000126",
+          "fits": true,
+          "model": "Gemini 2.5 Pro",
+          "model_id": "gemini-2.5-pro",
+          "provider": "google"
+        },
+        {
+          "context_used_pct": "0.04",
+          "context_window": 272000,
+          "cost_per_call": "0.000126",
+          "fits": true,
+          "model": "GPT-5",
+          "model_id": "gpt-5",
+          "provider": "openai"
+        },
+        {
+          "context_used_pct": "0.04",
+          "context_window": 272000,
+          "cost_per_call": "0.000126",
+          "fits": true,
+          "model": "GPT-5.1",
+          "model_id": "gpt-5.1",
+          "provider": "openai"
+        },
+        {
+          "context_used_pct": "0.01",
+          "context_window": 1000000,
+          "cost_per_call": "0.000126",
+          "fits": true,
+          "model": "Grok 4.3",
+          "model_id": "grok-4.3",
+          "provider": "xai"
+        },
+        {
+          "context_used_pct": "0.01",
+          "context_window": 1000000,
+          "cost_per_call": "0.000152",
+          "fits": true,
+          "model": "Gemini 3.5 Flash",
+          "model_id": "gemini-3.5-flash",
+          "provider": "google"
+        },
+        {
+          "context_used_pct": "0.08",
+          "context_window": 128000,
+          "cost_per_call": "0.000152",
+          "fits": true,
+          "model": "Mistral Medium 3.5",
+          "model_id": "mistral-medium-3-5-26-04",
+          "provider": "mistral"
+        },
+        {
+          "context_used_pct": "0.04",
+          "context_window": 272000,
+          "cost_per_call": "0.000177",
+          "fits": true,
+          "model": "GPT-5.2",
+          "model_id": "gpt-5.2",
+          "provider": "openai"
+        },
+        {
+          "context_used_pct": "0.01",
+          "context_window": 1000000,
+          "cost_per_call": "0.000202",
+          "fits": true,
+          "model": "Claude Sonnet 5",
+          "model_id": "claude-sonnet-5",
+          "provider": "anthropic"
+        },
+        {
+          "context_used_pct": "0.05",
+          "context_window": 200000,
+          "cost_per_call": "0.000202",
+          "fits": true,
+          "model": "Gemini 3.1 Pro",
+          "model_id": "gemini-3.1-pro",
+          "provider": "google"
+        },
+        {
+          "context_used_pct": "0.01",
+          "context_window": 1047576,
+          "cost_per_call": "0.000202",
+          "fits": true,
+          "model": "GPT-4.1",
+          "model_id": "gpt-4.1",
+          "provider": "openai"
+        },
+        {
+          "context_used_pct": "0.04",
+          "context_window": 272000,
+          "cost_per_call": "0.000202",
+          "fits": true,
+          "model": "GPT-5.6 Terra",
+          "model_id": "gpt-5.6-terra",
+          "provider": "openai"
+        },
+        {
+          "context_used_pct": "0.05",
+          "context_window": 200000,
+          "cost_per_call": "0.000202",
+          "fits": true,
+          "model": "o3",
+          "model_id": "o3",
+          "provider": "openai"
+        },
+        {
+          "context_used_pct": "0.02",
+          "context_window": 500000,
+          "cost_per_call": "0.000202",
+          "fits": true,
+          "model": "Grok 4.5",
+          "model_id": "grok-4.5",
+          "provider": "xai"
+        },
+        {
+          "context_used_pct": "0.04",
+          "context_window": 272000,
+          "cost_per_call": "0.000253",
+          "fits": true,
+          "model": "GPT-5.4",
+          "model_id": "gpt-5.4",
+          "provider": "openai"
+        },
+        {
+          "context_used_pct": "0.08",
+          "context_window": 128000,
+          "cost_per_call": "0.000253",
+          "fits": true,
+          "model": "GPT-4o",
+          "model_id": "gpt-4o",
+          "provider": "openai"
+        },
+        {
+          "context_used_pct": "0.01",
+          "context_window": 1000000,
+          "cost_per_call": "0.000303",
+          "fits": true,
+          "model": "Claude Sonnet 4.6",
+          "model_id": "claude-sonnet-4-6",
+          "provider": "anthropic"
+        },
+        {
+          "context_used_pct": "0.04",
+          "context_window": 272000,
+          "cost_per_call": "0.000404",
+          "fits": true,
+          "model": "GPT-5.6 Sol",
+          "model_id": "gpt-5.6-sol",
+          "provider": "openai"
+        },
+        {
+          "context_used_pct": "0.01",
+          "context_window": 1000000,
+          "cost_per_call": "0.000505",
+          "fits": true,
+          "model": "Claude Opus 5",
+          "model_id": "claude-opus-5",
+          "provider": "anthropic"
+        },
+        {
+          "context_used_pct": "0.01",
+          "context_window": 1000000,
+          "cost_per_call": "0.000505",
+          "fits": true,
+          "model": "Claude Opus 4.8",
+          "model_id": "claude-opus-4-8",
+          "provider": "anthropic"
+        },
+        {
+          "context_used_pct": "0.01",
+          "context_window": 1000000,
+          "cost_per_call": "0.000505",
+          "fits": true,
+          "model": "Claude Opus 4.7",
+          "model_id": "claude-opus-4-7",
+          "provider": "anthropic"
+        },
+        {
+          "context_used_pct": "0.04",
+          "context_window": 272000,
+          "cost_per_call": "0.000505",
+          "fits": true,
+          "model": "GPT-5.5",
+          "model_id": "gpt-5.5",
+          "provider": "openai"
+        },
+        {
+          "context_used_pct": "0.01",
+          "context_window": 1000000,
+          "cost_per_call": "0.001010",
+          "fits": true,
+          "model": "Claude Fable 5",
+          "model_id": "claude-fable-5",
+          "provider": "anthropic"
+        },
+        {
+          "context_used_pct": "0.04",
+          "context_window": 272000,
+          "cost_per_call": "0.003030",
+          "fits": true,
+          "model": "GPT-5.5 Pro",
+          "model_id": "gpt-5.5-pro",
+          "provider": "openai"
+        }
+      ]
+    },
+    "tool_slug": "token-calculator",
+    "warnings": []
+  },
+  "vectordb-estimate": {
+    "artifacts": [],
+    "metrics": {
+      "bytes_per_vector": 9416,
+      "index_multiplier": "1.50",
+      "index_overhead_gb": "2.86",
+      "metadata_gb": "0.19",
+      "raw_gb": "5.72",
+      "replicas": 2,
+      "total_gb": "17.54"
+    },
+    "series": {},
+    "tables": {
+      "breakdown": [
+        {
+          "component": "Raw vectors",
+          "gb": "5.72"
+        },
+        {
+          "component": "HNSW index overhead",
+          "gb": "2.86"
+        },
+        {
+          "component": "Metadata",
+          "gb": "0.19"
+        },
+        {
+          "component": "Replicas (x2)",
+          "gb": "17.54"
+        }
+      ],
+      "providers": [
+        {
+          "at_minimum": "no",
+          "managed": "no",
+          "monthly_cost": "$0.00",
+          "provider": "FAISS",
+          "slug": "faiss",
+          "status": "stable"
+        },
+        {
+          "at_minimum": "no",
+          "managed": "no",
+          "monthly_cost": "$0.00",
+          "provider": "Chroma",
+          "slug": "chroma",
+          "status": "stable"
+        },
+        {
+          "at_minimum": "no",
+          "managed": "yes",
+          "monthly_cost": "$1.40",
+          "provider": "turbopuffer",
+          "slug": "turbopuffer",
+          "status": "stable"
+        },
+        {
+          "at_minimum": "no",
+          "managed": "yes",
+          "monthly_cost": "$2.00",
+          "provider": "pgvector",
+          "slug": "pgvector",
+          "status": "recommended"
+        },
+        {
+          "at_minimum": "no",
+          "managed": "yes",
+          "monthly_cost": "$2.50",
+          "provider": "LanceDB",
+          "slug": "lancedb",
+          "status": "stable"
+        },
+        {
+          "at_minimum": "no",
+          "managed": "yes",
+          "monthly_cost": "$3.50",
+          "provider": "Milvus",
+          "slug": "milvus",
+          "status": "stable"
+        },
+        {
+          "at_minimum": "no",
+          "managed": "yes",
+          "monthly_cost": "$4.50",
+          "provider": "Qdrant",
+          "slug": "qdrant",
+          "status": "recommended"
+        },
+        {
+          "at_minimum": "no",
+          "managed": "yes",
+          "monthly_cost": "$8.00",
+          "provider": "Pinecone",
+          "slug": "pinecone",
+          "status": "recommended"
+        },
+        {
+          "at_minimum": "no",
+          "managed": "yes",
+          "monthly_cost": "$18.00",
+          "provider": "Redis Vector Search",
+          "slug": "redis-vector",
+          "status": "stable"
+        },
+        {
+          "at_minimum": "yes",
+          "managed": "yes",
+          "monthly_cost": "$25.00",
+          "provider": "Weaviate",
+          "slug": "weaviate",
+          "status": "stable"
+        },
+        {
+          "at_minimum": "yes",
+          "managed": "yes",
+          "monthly_cost": "$95.00",
+          "provider": "Elasticsearch",
+          "slug": "elasticsearch",
+          "status": "stable"
+        }
+      ]
+    },
+    "tool_slug": "vectordb-estimate",
+    "warnings": []
+  },
+  "vram-estimate": {
+    "artifacts": [],
+    "metrics": {
+      "activations_gb": "0.13",
+      "attention": "GQA",
+      "kv_bytes_per_token": 131072,
+      "kv_cache_gb": "4.00",
+      "overhead_gb": "1.91",
+      "recommended_gpu": "RTX 3090 (median)",
+      "total_vram_gb": "20.99",
+      "weights_gb": "14.96"
+    },
+    "series": {},
+    "tables": {
+      "breakdown": [
+        {
+          "component": "Weights",
+          "gb": "14.96"
+        },
+        {
+          "component": "KV cache",
+          "gb": "4.00"
+        },
+        {
+          "component": "Activations",
+          "gb": "0.13"
+        },
+        {
+          "component": "Runtime overhead (vllm)",
+          "gb": "1.91"
+        },
+        {
+          "component": "Total",
+          "gb": "20.99"
+        }
+      ],
+      "gpu_fit": [
+        {
+          "detail": "3.01 GiB spare",
+          "gpu": "RTX 3090 x1",
+          "hourly": "$0.22",
+          "instance": "RTX 3090 (median)",
+          "provider": "vast",
+          "verdict": "fits",
+          "vram_gb": 24
+        },
+        {
+          "detail": "3.01 GiB spare",
+          "gpu": "RTX 4090 x1",
+          "hourly": "$0.35",
+          "instance": "RTX 4090 (median)",
+          "provider": "vast",
+          "verdict": "fits",
+          "vram_gb": 24
+        },
+        {
+          "detail": "27.01 GiB spare",
+          "gpu": "RTX A6000 x1",
+          "hourly": "$0.49",
+          "instance": "RTX A6000",
+          "provider": "runpod",
+          "verdict": "fits",
+          "vram_gb": 48
+        },
+        {
+          "detail": "3.01 GiB spare",
+          "gpu": "RTX 4090 x1",
+          "hourly": "$0.69",
+          "instance": "RTX 4090",
+          "provider": "runpod",
+          "verdict": "fits",
+          "vram_gb": 24
+        },
+        {
+          "detail": "3.01 GiB spare",
+          "gpu": "L4 x1",
+          "hourly": "$0.71",
+          "instance": "g2-standard-4",
+          "provider": "gcp",
+          "verdict": "fits",
+          "vram_gb": 24
+        },
+        {
+          "detail": "3.01 GiB spare",
+          "gpu": "L4 x1",
+          "hourly": "$0.80",
+          "instance": "g6.xlarge",
+          "provider": "aws",
+          "verdict": "fits",
+          "vram_gb": 24
+        },
+        {
+          "detail": "27.01 GiB spare",
+          "gpu": "L40S x1",
+          "hourly": "$0.99",
+          "instance": "L40S",
+          "provider": "runpod",
+          "verdict": "fits",
+          "vram_gb": 48
+        },
+        {
+          "detail": "3.01 GiB spare",
+          "gpu": "A10G x1",
+          "hourly": "$1.01",
+          "instance": "g5.xlarge",
+          "provider": "aws",
+          "verdict": "fits",
+          "vram_gb": 24
+        },
+        {
+          "detail": "59.01 GiB spare",
+          "gpu": "A100 x1",
+          "hourly": "$1.10",
+          "instance": "A100 SXM (median)",
+          "provider": "vast",
+          "verdict": "fits",
+          "vram_gb": 80
+        },
+        {
+          "detail": "3.01 GiB spare",
+          "gpu": "A10 x1",
+          "hourly": "$1.29",
+          "instance": "gpu_1x_a10",
+          "provider": "lambda",
+          "verdict": "fits",
+          "vram_gb": 24
+        },
+        {
+          "detail": "59.01 GiB spare",
+          "gpu": "A100 x1",
+          "hourly": "$1.49",
+          "instance": "A100 SXM",
+          "provider": "runpod",
+          "verdict": "fits",
+          "vram_gb": 80
+        },
+        {
+          "detail": "27.01 GiB spare",
+          "gpu": "L40S x1",
+          "hourly": "$1.86",
+          "instance": "g6e.xlarge",
+          "provider": "aws",
+          "verdict": "fits",
+          "vram_gb": 48
+        },
+        {
+          "detail": "59.01 GiB spare",
+          "gpu": "H100 x1",
+          "hourly": "$1.93",
+          "instance": "H100 SXM (median)",
+          "provider": "vast",
+          "verdict": "fits",
+          "vram_gb": 80
+        },
+        {
+          "detail": "19.01 GiB spare",
+          "gpu": "A100 x1",
+          "hourly": "$1.99",
+          "instance": "gpu_1x_a100_sxm4",
+          "provider": "lambda",
+          "verdict": "fits",
+          "vram_gb": 40
+        },
+        {
+          "detail": "59.01 GiB spare",
+          "gpu": "H100 x1",
+          "hourly": "$2.49",
+          "instance": "gpu_1x_h100_pcie",
+          "provider": "lambda",
+          "verdict": "fits",
+          "vram_gb": 80
+        },
+        {
+          "detail": "59.01 GiB spare",
+          "gpu": "H100 x1",
+          "hourly": "$2.69",
+          "instance": "H100 SXM",
+          "provider": "runpod",
+          "verdict": "fits",
+          "vram_gb": 80
+        },
+        {
+          "detail": "59.01 GiB spare",
+          "gpu": "H100 x1",
+          "hourly": "$2.99",
+          "instance": "H100 SXM",
+          "provider": "runpod",
+          "verdict": "fits",
+          "vram_gb": 80
+        },
+        {
+          "detail": "59.01 GiB spare",
+          "gpu": "A100 x1",
+          "hourly": "$3.67",
+          "instance": "NC24ads_A100_v4",
+          "provider": "azure",
+          "verdict": "fits",
+          "vram_gb": 80
+        },
+        {
+          "detail": "19.01 GiB spare",
+          "gpu": "A100 x1",
+          "hourly": "$3.67",
+          "instance": "a2-highgpu-1g",
+          "provider": "gcp",
+          "verdict": "fits",
+          "vram_gb": 40
+        },
+        {
+          "detail": "75.01 GiB spare",
+          "gpu": "L4 x4",
+          "hourly": "$4.00",
+          "instance": "g2-standard-48",
+          "provider": "gcp",
+          "verdict": "fits",
+          "vram_gb": 96
+        },
+        {
+          "detail": "120.01 GiB spare",
+          "gpu": "H200 x1",
+          "hourly": "$4.39",
+          "instance": "H200 SXM",
+          "provider": "runpod",
+          "verdict": "fits",
+          "vram_gb": 141
+        },
+        {
+          "detail": "59.01 GiB spare",
+          "gpu": "A100 x1",
+          "hourly": "$5.07",
+          "instance": "a2-ultragpu-1g",
+          "provider": "gcp",
+          "verdict": "fits",
+          "vram_gb": 80
+        },
+        {
+          "detail": "75.01 GiB spare",
+          "gpu": "A10G x4",
+          "hourly": "$5.67",
+          "instance": "g5.12xlarge",
+          "provider": "aws",
+          "verdict": "fits",
+          "vram_gb": 96
+        },
+        {
+          "detail": "171.01 GiB spare",
+          "gpu": "L40S x4",
+          "hourly": "$10.49",
+          "instance": "g6e.12xlarge",
+          "provider": "aws",
+          "verdict": "fits",
+          "vram_gb": 192
+        },
+        {
+          "detail": "299.01 GiB spare",
+          "gpu": "A100 x8",
+          "hourly": "$21.96",
+          "instance": "p4d.24xlarge",
+          "provider": "aws",
+          "verdict": "fits",
+          "vram_gb": 320
+        },
+        {
+          "detail": "619.01 GiB spare",
+          "gpu": "A100 x8",
+          "hourly": "$27.45",
+          "instance": "p4de.24xlarge",
+          "provider": "aws",
+          "verdict": "fits",
+          "vram_gb": 640
+        },
+        {
+          "detail": "619.01 GiB spare",
+          "gpu": "H100 x8",
+          "hourly": "$29.50",
+          "instance": "p5.48xlarge",
+          "provider": "aws",
+          "verdict": "fits",
+          "vram_gb": 640
+        },
+        {
+          "detail": "619.01 GiB spare",
+          "gpu": "H100 x8",
+          "hourly": "$31.92",
+          "instance": "gpu_8x_h100_sxm5",
+          "provider": "lambda",
+          "verdict": "fits",
+          "vram_gb": 640
+        },
+        {
+          "detail": "619.01 GiB spare",
+          "gpu": "A100 x8",
+          "hourly": "$32.77",
+          "instance": "ND96amsr_A100_v4",
+          "provider": "azure",
+          "verdict": "fits",
+          "vram_gb": 640
+        },
+        {
+          "detail": "619.01 GiB spare",
+          "gpu": "H100 x8",
+          "hourly": "$55.04",
+          "instance": "p5.48xlarge",
+          "provider": "aws",
+          "verdict": "fits",
+          "vram_gb": 640
+        },
+        {
+          "detail": "619.01 GiB spare",
+          "gpu": "H100 x8",
+          "hourly": "$88.49",
+          "instance": "a3-highgpu-8g",
+          "provider": "gcp",
+          "verdict": "fits",
+          "vram_gb": 640
+        },
+        {
+          "detail": "619.01 GiB spare",
+          "gpu": "H100 x8",
+          "hourly": "$93.40",
+          "instance": "a3-megagpu-8g",
+          "provider": "gcp",
+          "verdict": "fits",
+          "vram_gb": 640
+        },
+        {
+          "detail": "619.01 GiB spare",
+          "gpu": "H100 x8",
+          "hourly": "$98.32",
+          "instance": "ND96isr_H100_v5",
+          "provider": "azure",
+          "verdict": "fits",
+          "vram_gb": 640
+        },
+        {
+          "detail": "needs 4.99 GiB more",
+          "gpu": "T4 x1",
+          "hourly": "$0.53",
+          "instance": "g4dn.xlarge",
+          "provider": "aws",
+          "verdict": "does not fit",
+          "vram_gb": 16
+        },
+        {
+          "detail": "needs 4.99 GiB more",
+          "gpu": "T4 x1",
+          "hourly": "$0.53",
+          "instance": "NC4as_T4_v3",
+          "provider": "azure",
+          "verdict": "does not fit",
+          "vram_gb": 16
+        }
+      ]
+    },
+    "tool_slug": "vram-estimate",
+    "warnings": []
+  }
+}
