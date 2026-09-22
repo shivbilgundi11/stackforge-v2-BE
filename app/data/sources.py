@@ -21,7 +21,7 @@ SOURCES: tuple[SourceSeed, ...] = (
     SourceSeed(
         "anthropic-pricing",
         "Anthropic API pricing",
-        "https://platform.claude.com/docs/en/pricing",
+        "https://platform.claude.com/docs/en/about-claude/pricing",
         "scrape",
     ),
     SourceSeed(
@@ -39,7 +39,7 @@ SOURCES: tuple[SourceSeed, ...] = (
     SourceSeed(
         "mistral-pricing",
         "Mistral AI pricing",
-        "https://mistral.ai/pricing",
+        "https://mistral.ai/pricing/api",
         "scrape",
     ),
     SourceSeed(

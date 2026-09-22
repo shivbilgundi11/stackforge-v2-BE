@@ -10,16 +10,38 @@ decorative — a row nobody has re-read should look old, because it is.
 
 Three states, deliberately:
 
-  * **2026-08-09** — read from the provider's live pricing page. Every active
-    row now sits here.
-  * **2026-06-24** — Anthropic, from the vendor's own published rate card,
-    which carries that date. Not backdated to today just because it was read
-    today; the rate card is what is stale, not the reading of it.
+  * **2026-09-22** — read from the provider's live pricing page in the most
+    recent sweep. Anthropic, OpenAI, Google, Mistral, DeepSeek, xAI, Voyage
+    and Together were all re-read that day and their rows moved here.
+  * **2026-08-09** — read live in the previous sweep and *not* re-confirmed
+    since. These are not rows anybody believes are stale; they are rows the
+    September sweep could not check, because the provider stopped publishing
+    the figure. Cohere moved Embed 4 and the Rerank 4 pair behind "Model
+    Vault pricing" and Jina's embeddings page dropped its rate table, so
+    there is no longer a public number to read. Amazon's Nova rows are here
+    for a different reason: the Bedrock page is paginated by provider and the
+    sweep could only see part of it, which is not the same as having read it.
+    An unreadable source leaves the date alone rather than moving it.
   * **2026-06-29** — carried from the previous build. Every remaining row on
     this date is also marked `deprecated`, because re-reading each provider's
     page is how they were found to be gone: Nova 1, Cohere Embed 3 and Rerank
     3.5, Jina Reranker v2, Together's BGE and Nomic, and Meta's Llama 4 pair.
     Their prices are the last figure anyone confirmed, and the date says so.
+
+Three rows are absent from their provider's current page but left `active` on
+purpose: `gemini-embedding`, `multilingual-e5-large-instruct` and
+`nova-2-lite`. Absence from a page that was read in part is weaker evidence
+than a page that says "deprecated" in so many words, and demoting a model
+somebody is still calling is the more expensive mistake of the two. They are
+the first thing to settle in the next sweep.
+
+DeepSeek no longer has one price per model. Both rows are stored at the
+**off-peak** rate; DeepSeek charges double between 01:00-04:00 and 06:00-10:00
+UTC on weekdays. One column cannot hold two numbers, and off-peak is the one
+the provider quotes first, so that is what is here — but it makes these two
+rows a floor rather than an estimate, and a caller who runs in European
+business hours will pay twice what this file says. Splitting the column is the
+real fix and it is not a seed-file change.
 
 A row marked `deprecated` here has usually disappeared from its provider's
 current pricing page. That is recorded rather than deleted: someone running
@@ -38,8 +60,10 @@ from __future__ import annotations
 from datetime import date
 from typing import NamedTuple
 
-VERIFIED_LIVE = date(2026, 8, 9)
-VERIFIED_ANTHROPIC = date(2026, 6, 24)
+VERIFIED_LIVE = date(2026, 9, 22)
+# The previous sweep. A row still on this date is one the September sweep
+# reached for and could not read, not one nobody thought about.
+VERIFIED_STALE = date(2026, 8, 9)
 VERIFIED_CARRIED = date(2026, 6, 29)
 
 
@@ -94,23 +118,27 @@ MODELS: tuple[ModelSeed, ...] = (
         _FULL,
         "anthropic:api",
         "anthropic-pricing",
-        VERIFIED_ANTHROPIC,
+        VERIFIED_LIVE,
     ),
     ModelSeed(
         "anthropic",
         "claude-sonnet-5",
         "Claude Sonnet 5",
         _CHAT,
-        "3.00",
-        "15.00",
-        "0.30",
+        # The $2/$10 launch price was announced as introductory through
+        # 2026-08-31, and the rise to $3/$15 scheduled for 2026-09-01 was
+        # called off. The seed held the increase that never happened, so every
+        # Sonnet 5 estimate was 50% high.
+        "2.00",
+        "10.00",
+        "0.20",
         1_000_000,
         128_000,
         None,
         _FULL,
         "anthropic:api",
         "anthropic-pricing",
-        VERIFIED_ANTHROPIC,
+        VERIFIED_LIVE,
     ),
     ModelSeed(
         "anthropic",
@@ -126,7 +154,7 @@ MODELS: tuple[ModelSeed, ...] = (
         _FULL,
         "anthropic:api",
         "anthropic-pricing",
-        VERIFIED_ANTHROPIC,
+        VERIFIED_LIVE,
     ),
     ModelSeed(
         "anthropic",
@@ -142,7 +170,7 @@ MODELS: tuple[ModelSeed, ...] = (
         _FULL,
         "anthropic:api",
         "anthropic-pricing",
-        VERIFIED_ANTHROPIC,
+        VERIFIED_LIVE,
     ),
     ModelSeed(
         "anthropic",
@@ -158,7 +186,7 @@ MODELS: tuple[ModelSeed, ...] = (
         _FULL,
         "anthropic:api",
         "anthropic-pricing",
-        VERIFIED_ANTHROPIC,
+        VERIFIED_LIVE,
     ),
     ModelSeed(
         "anthropic",
@@ -174,7 +202,7 @@ MODELS: tuple[ModelSeed, ...] = (
         _FULL,
         "anthropic:api",
         "anthropic-pricing",
-        VERIFIED_ANTHROPIC,
+        VERIFIED_LIVE,
     ),
     ModelSeed(
         "anthropic",
@@ -190,7 +218,7 @@ MODELS: tuple[ModelSeed, ...] = (
         _FULL,
         "anthropic:api",
         "anthropic-pricing",
-        VERIFIED_ANTHROPIC,
+        VERIFIED_LIVE,
     ),
     ModelSeed(
         "anthropic",
@@ -206,9 +234,10 @@ MODELS: tuple[ModelSeed, ...] = (
         _TOOLS_VISION,
         "anthropic:api",
         "anthropic-pricing",
-        VERIFIED_ANTHROPIC,
+        VERIFIED_LIVE,
         "deprecated",
-        "Retires 2026-08-05. Migrate to claude-opus-5.",
+        "Retired on the Claude API; still served on Bedrock and Google Cloud. "
+        "Migrate to claude-opus-5.",
     ),
     # ---- OpenAI ---------------------------------------------------------
     ModelSeed(
@@ -216,9 +245,10 @@ MODELS: tuple[ModelSeed, ...] = (
         "gpt-5.6-sol",
         "GPT-5.6 Sol",
         _CHAT,
-        "5.00",
-        "30.00",
-        "0.50",
+        # Cut from $5/$30 since the August sweep.
+        "4.00",
+        "20.00",
+        "0.40",
         272_000,
         128_000,
         None,
@@ -537,9 +567,10 @@ MODELS: tuple[ModelSeed, ...] = (
         "gemini-3.6-flash",
         "Gemini 3.6 Flash",
         _CHAT,
-        "1.50",
-        "7.50",
-        "0.15",
+        # Halved since the August sweep, from $1.50/$7.50.
+        "0.75",
+        "3.75",
+        "0.075",
         1_000_000,
         65_536,
         None,
@@ -608,7 +639,11 @@ MODELS: tuple[ModelSeed, ...] = (
         "2.00",
         "12.00",
         "0.20",
-        1_000_000,
+        # 200k, not the 1M this row used to claim. Google lists the model as
+        # `gemini-3.1-pro-preview`; the price matches to the cent, the context
+        # window did not, and a context figure that is 5x the real one silently
+        # breaks every "does my prompt fit" answer built on it.
+        200_000,
         65_536,
         None,
         _FULL,
@@ -631,6 +666,9 @@ MODELS: tuple[ModelSeed, ...] = (
         "google:api",
         "google-gemini-pricing",
         VERIFIED_LIVE,
+        "deprecated",
+        "Listed as `gemini-3-flash-preview` and marked deprecated by Google. "
+        "Migrate to gemini-3.6-flash, which is now cheaper in both directions.",
     ),
     ModelSeed(
         "google",
@@ -695,7 +733,7 @@ MODELS: tuple[ModelSeed, ...] = (
         _TOOLS,
         "hf:mistralai/Mistral-Large-Instruct",
         "mistral-pricing",
-        VERIFIED_LIVE,
+        VERIFIED_STALE,
         "deprecated",
         "Superseded by Mistral Large 3 (mistral-large-3-25-12) at a quarter of the price: "
         "$0.50/$1.50 against $2.00/$6.00 per 1M.",
@@ -810,7 +848,7 @@ MODELS: tuple[ModelSeed, ...] = (
         _TOOLS,
         "hf:mistralai/Mistral-Small-Instruct",
         "mistral-pricing",
-        VERIFIED_LIVE,
+        VERIFIED_STALE,
         "deprecated",
         "Superseded by Mistral Small 4 (mistral-small-4-0-26-03).",
     ),
@@ -844,7 +882,7 @@ MODELS: tuple[ModelSeed, ...] = (
         _TOOLS,
         "hf:mistralai/Codestral",
         "mistral-pricing",
-        VERIFIED_LIVE,
+        VERIFIED_STALE,
         "deprecated",
         "Mistral version-stamps its API ids; this one now reads "
         "codestral-25-08. Same model, same price.",
@@ -978,7 +1016,7 @@ MODELS: tuple[ModelSeed, ...] = (
         _TOOLS,
         "hf:deepseek-ai/DeepSeek-V3",
         "deepseek-pricing",
-        VERIFIED_LIVE,
+        VERIFIED_STALE,
         "deprecated",
         "No longer listed on the DeepSeek pricing page. Superseded by deepseek-v4-flash at half "
         "the price and 16x the context.",
@@ -988,9 +1026,11 @@ MODELS: tuple[ModelSeed, ...] = (
         "deepseek-v4-flash",
         "DeepSeek V4 Flash",
         _CHAT,
-        "0.14",
-        "0.28",
-        "0.0028",
+        # Off-peak, and the rate the legacy id now bills at rather than the
+        # $0.14/$0.28 it once had of its own.
+        "0.15",
+        "0.60",
+        "0.003",
         1_000_000,
         32_000,
         None,
@@ -998,15 +1038,20 @@ MODELS: tuple[ModelSeed, ...] = (
         "hf:deepseek-ai/DeepSeek-V4",
         "deepseek-pricing",
         VERIFIED_LIVE,
+        "deprecated",
+        "Legacy id, still accepted but now served by `deepseek-flash` and "
+        "billed at its rate. Peak hours cost double: see the module docstring.",
     ),
     ModelSeed(
         "deepseek",
         "deepseek-v4-pro",
         "DeepSeek V4 Pro",
         _CHAT,
-        "0.435",
-        "0.87",
-        "0.003625",
+        # Off-peak. Up from $0.435/$0.87, and now a floor rather than a price:
+        # peak hours cost double. See the module docstring.
+        "0.66",
+        "1.98",
+        "0.022",
         1_000_000,
         32_000,
         None,
@@ -1029,7 +1074,7 @@ MODELS: tuple[ModelSeed, ...] = (
         {"vision": False, "tools": True, "json_mode": True, "thinking": True},
         "hf:deepseek-ai/DeepSeek-R1",
         "deepseek-pricing",
-        VERIFIED_LIVE,
+        VERIFIED_STALE,
         "deprecated",
         "No longer listed on the DeepSeek pricing page. Superseded by deepseek-v4-pro.",
     ),
@@ -1048,7 +1093,7 @@ MODELS: tuple[ModelSeed, ...] = (
         _TOOLS_VISION,
         "xai:api",
         "xai-pricing",
-        VERIFIED_LIVE,
+        VERIFIED_STALE,
         "deprecated",
         "No longer listed in the xAI model docs. Grok 4.3 is cheaper on both input and output "
         "with 8x the context.",
@@ -1115,7 +1160,7 @@ MODELS: tuple[ModelSeed, ...] = (
         _TOOLS,
         "xai:api",
         "xai-pricing",
-        VERIFIED_LIVE,
+        VERIFIED_STALE,
         "deprecated",
         "No longer listed in the xAI model docs.",
     ),
@@ -1138,7 +1183,7 @@ MODELS: tuple[ModelSeed, ...] = (
         _TOOLS_VISION,
         "amazon:api",
         "aws-bedrock-pricing",
-        VERIFIED_LIVE,
+        VERIFIED_STALE,
     ),
     ModelSeed(
         "amazon",
@@ -1278,7 +1323,7 @@ MODELS: tuple[ModelSeed, ...] = (
         _TEXT_ONLY,
         "google:api",
         "google-gemini-pricing",
-        VERIFIED_LIVE,
+        VERIFIED_STALE,
     ),
     # Cohere's pricing page now lists one retrieval embedder, Embed 4. The v3
     # pair is kept as deprecated rather than deleted because existing
@@ -1300,7 +1345,7 @@ MODELS: tuple[ModelSeed, ...] = (
         _TEXT_ONLY,
         "cohere:api",
         "cohere-pricing",
-        VERIFIED_LIVE,
+        VERIFIED_STALE,
     ),
     ModelSeed(
         "cohere",
@@ -1486,7 +1531,7 @@ MODELS: tuple[ModelSeed, ...] = (
         _TEXT_ONLY,
         "hf:mistralai/Mistral-Embed",
         "mistral-pricing",
-        VERIFIED_LIVE,
+        VERIFIED_STALE,
         "deprecated",
         "Mistral version-stamps its API ids; this one now reads "
         "mistral-embed-23-12. Same model, same price.",
@@ -1525,7 +1570,7 @@ MODELS: tuple[ModelSeed, ...] = (
         _TEXT_ONLY,
         "hf:jinaai/jina-embeddings-v3",
         "jina-pricing",
-        VERIFIED_LIVE,
+        VERIFIED_STALE,
     ),
     ModelSeed(
         "together",
@@ -1583,7 +1628,7 @@ MODELS: tuple[ModelSeed, ...] = (
         _TEXT_ONLY,
         "hf:intfloat/multilingual-e5-large-instruct",
         "together-pricing",
-        VERIFIED_LIVE,
+        VERIFIED_STALE,
     ),
     # ---- Rerank ---------------------------------------------------------
     # Rerank is priced per 1K searches, not per 1M tokens - one search being
@@ -1604,7 +1649,7 @@ MODELS: tuple[ModelSeed, ...] = (
         _TEXT_ONLY,
         "cohere:api",
         "cohere-pricing",
-        VERIFIED_LIVE,
+        VERIFIED_STALE,
         price_unit="searches",
     ),
     ModelSeed(
@@ -1621,7 +1666,7 @@ MODELS: tuple[ModelSeed, ...] = (
         _TEXT_ONLY,
         "cohere:api",
         "cohere-pricing",
-        VERIFIED_LIVE,
+        VERIFIED_STALE,
         price_unit="searches",
     ),
     ModelSeed(

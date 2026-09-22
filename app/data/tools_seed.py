@@ -225,8 +225,8 @@ TOOLS: tuple[ToolSeed, ...] = (
         "chroma",
         "Chroma",
         "vector-db",
-        "Embedded vector store aimed at prototyping and local development.",
-        "caution",
+        "Embedded vector store with a managed cloud, strong on local development.",
+        "stable",
         62,
         "Apache-2.0",
         True,
@@ -246,7 +246,9 @@ TOOLS: tuple[ToolSeed, ...] = (
             "min_monthly": 0,
         },
         "https://docs.trychroma.com",
-        "Excellent for prototypes; operational story at production scale is still thin.",
+        "Chroma Cloud reached GA in August 2025 with SOC 2 Type II, customer-managed "
+        "keys, point-in-time recovery and BYOC, which answers the production "
+        "operations question this entry used to raise.",
         ("qdrant", "pgvector"),
     ),
     ToolSeed(
@@ -773,7 +775,7 @@ TOOLS: tuple[ToolSeed, ...] = (
         "AutoGen",
         "agent-framework",
         "Microsoft's conversational multi-agent framework.",
-        "caution",
+        "deprecated",
         60,
         "MIT",
         True,
@@ -791,8 +793,11 @@ TOOLS: tuple[ToolSeed, ...] = (
             "free_tier": True,
         },
         "https://microsoft.github.io/autogen/",
-        "Two consecutive API rewrites (0.2 → 0.4 → AG2 fork). Pin a version and "
-        "expect migration work.",
+        "Superseded. Microsoft folded AutoGen and Semantic Kernel into Microsoft "
+        "Agent Framework and publishes a migration guide for it; the repository "
+        "has had no commits since April 2026. AG2 is the community fork if you "
+        "need the old API. Two rewrites preceded this (0.2 → 0.4 → AG2), so a "
+        "pinned version buys time rather than safety.",
         ("langgraph", "openai-agents-sdk"),
     ),
     ToolSeed(
@@ -1715,8 +1720,10 @@ TOOLS: tuple[ToolSeed, ...] = (
             "free_tier": False,
         },
         "https://devcenter.heroku.com",
-        "Free tier gone, pricing well above comparable platforms, and slow to add "
-        "GPU or modern runtime support.",
+        "No free dyno since 2022 (Eco starts at $5/mo, and sleeps), and dyno "
+        "pricing still sits well above Railway, Render and Fly for the same "
+        "resources. Heroku Managed Inference and Agents now covers hosted model "
+        "calls, so the gap is GPU compute rather than AI support generally.",
         ("railway", "render", "fly-io"),
     ),
     # ================= databases =================
